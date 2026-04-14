@@ -7,7 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import "./App.css";
 
-const API_URL = "http://127.0.0.1:8000/api";
+const API_URL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000/api";
 
 function App() {
     const [code, setCode] = useState("");
@@ -155,22 +155,17 @@ function App() {
             else {
                 const formData = new FormData();
 
-                if (inputMode === "folder") {
-                    // For folder mode, create a zip-like structure or send all files
-                    for (let i = 0; i < selectedFiles.length; i++) {
-                        formData.append("files", selectedFiles[i]);
-                    }
-                } else {
-                    // For file mode
-                    for (let i = 0; i < selectedFiles.length; i++) {
-                        formData.append("files", selectedFiles[i]);
-                    }
+                // Both folder and file modes append files the same way
+                for (let i = 0; i < selectedFiles.length; i++) {
+                    formData.append("files", selectedFiles[i]);
                 }
 
                 response = await axios.post(`${API_URL}/analyze-multiple`, formData, {
                     headers: {
                         "Content-Type": "multipart/form-data",
                     },
+                    maxBodyLength: Infinity,
+                    maxContentLength: Infinity,
                 });
             }
 

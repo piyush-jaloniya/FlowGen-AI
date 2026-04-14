@@ -1,6 +1,6 @@
-import networkx as nx
 from typing import Dict, Any, List
-import uuid
+from .cache_service import cached_diagram
+from .identifier_formatter import IdentifierFormatter
 
 class FlowchartService:
     """
@@ -13,6 +13,7 @@ class FlowchartService:
         self.parser = parser
         self.nlp = nlp  # spaCy NLP model
         self.node_counter = 0
+        self.formatter = IdentifierFormatter(nlp=nlp)
 
     def _sanitize_id(self, text: str) -> str:
         """Sanitize text for use as Mermaid node ID."""
@@ -20,7 +21,25 @@ class FlowchartService:
 
     def _sanitize_label(self, text: str) -> str:
         """Sanitize text for use as Mermaid node label."""
-        return text.replace('"', "'").replace("\n", " ")
+        if not text:
+            return ""
+        # Replace problematic characters for Mermaid
+        text = text.replace('"', "'")
+        text = text.replace('\n', ' ')
+        text = text.replace('\r', '')
+        text = text.replace('[', '(')
+        text = text.replace(']', ')')
+        text = text.replace('{', '(')
+        text = text.replace('}', ')')
+        text = text.replace('#', 'num')
+        text = text.replace('&', 'and')
+        text = text.replace('<', 'lt')
+        text = text.replace('>', 'gt')
+        # Remove any remaining special chars that might break Mermaid
+        text = ''.join(c if c.isprintable() and c not in '|;' else ' ' for c in text)
+        # Collapse multiple spaces
+        text = ' '.join(text.split())
+        return text[:100]  # Limit length
 
     def _generate_node_id(self, prefix: str = "Node") -> str:
         """Generate a unique node ID."""
@@ -28,86 +47,48 @@ class FlowchartService:
         self.node_counter += 1
         return node_id
 
+    def _get_mermaid_styles(self) -> str:
+        """Return Mermaid CSS class definitions for node styling (Traditional Flowchart Colors)."""
+        return """    classDef decisionStyle fill:#FFF4CC,stroke:#E6B800,color:#000,stroke-width:2px
+    classDef processStyle fill:#CCE5FF,stroke:#3399FF,color:#000,stroke-width:2px
+    classDef loopStyle fill:#FFE5CC,stroke:#FF9933,color:#000,stroke-width:2px
+    classDef controlStyle fill:#FFCCCC,stroke:#CC0000,color:#000,stroke-width:2px
+    classDef returnStyle fill:#E6CCFF,stroke:#9933FF,color:#000,stroke-width:2px
+    classDef inputStyle fill:#CCFFCC,stroke:#33CC33,color:#000,stroke-width:2px
+    classDef outputStyle fill:#FFCCFF,stroke:#FF66FF,color:#000,stroke-width:2px
+    classDef startEndStyle fill:#FFCCCC,stroke:#FF6666,color:#000,stroke-width:3px
+    classDef functionStyle fill:#E6F2FF,stroke:#6699CC,color:#000,stroke-width:2px
+    classDef summaryStyle fill:#FFFFCC,stroke:#CCCC00,color:#000,stroke-width:2px"""
+
+
+
+    def _format_condition_label(self, condition: str, max_length: int = 50) -> str:
+        """Format condition for display in flowchart."""
+        if not condition:
+            return "condition"
+        
+        # Clean up the condition
+        condition = condition.strip()
+        
+        # Truncate if too long
+        if len(condition) > max_length:
+            condition = condition[:max_length-3] + "..."
+        
+        return condition
+
+    def _format_return_label(self, value: str) -> str:
+        """Format return statement label with icon."""
+        if value:
+            return f"Return {self._sanitize_label(str(value))}"
+        return "Return"
+
     def _extract_operation_type(self, call_name: str) -> str:
-        """
-        Use NLP to understand what type of operation a function call represents.
-        """
-        if not self.nlp or not call_name:
-            return "process"
-        
-        # Common patterns (fast path)
-        call_lower = call_name.lower()
-        
-        # I/O Operations
-        if call_lower in ["print", "println", "printf", "cout", "console", "log", "write", "display", "show"]:
-            return "output"
-        if call_lower in ["input", "scanf", "cin", "read", "readline", "gets", "getline"]:
-            return "input"
-        
-        # Data Operations
-        if call_lower in ["append", "push", "add", "insert", "extend"]:
-            return "data_add"
-        if call_lower in ["pop", "remove", "delete", "clear"]:
-            return "data_remove"
-        if call_lower in ["sort", "sorted", "reverse"]:
-            return "data_sort"
-        if call_lower in ["find", "search", "index", "contains"]:
-            return "search"
-        
-        # Mathematical Operations
-        if call_lower in ["sum", "total", "count", "max", "min", "avg", "average", "abs", "pow", "sqrt"]:
-            return "calculation"
-        
-        # Use NLP for semantic analysis
-        try:
-            doc = self.nlp(call_name)
-            # Analyze tokens and their types
-            for token in doc:
-                if token.pos_ == "VERB":
-                    lemma = token.lemma_.lower()
-                    if lemma in ["print", "display", "show", "output"]:
-                        return "output"
-                    elif lemma in ["read", "get", "input"]:
-                        return "input"
-                    elif lemma in ["calculate", "compute", "evaluate"]:
-                        return "calculation"
-                    elif lemma in ["sort", "order", "arrange"]:
-                        return "data_sort"
-                    elif lemma in ["search", "find", "locate"]:
-                        return "search"
-        except:
-            pass
-        
-        return "process"
+        """Use formatter to detect operation type."""
+        return self.formatter.detect_operation_type(call_name)
 
     def _generate_semantic_label(self, call_name: str, operation_type: str) -> str:
-        """
-        Generate human-readable label using NLP to convert function names to readable text.
-        """
-        if not call_name:
-            return "Process"
-        
-        # Convert camelCase or snake_case to readable text
-        import re
-        # Handle camelCase
-        s1 = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', call_name)
-        # Handle snake_case
-        s2 = s1.replace('_', ' ')
-        # Capitalize properly
-        readable = ' '.join(word.capitalize() for word in s2.split())
-        
-        # Add semantic context based on operation type
-        if operation_type == "output":
-            if not readable.lower().startswith(("print", "display", "output", "show")):
-                readable = f"Display {readable}"
-        elif operation_type == "input":
-            if not readable.lower().startswith(("get", "read", "input")):
-                readable = f"Get {readable}"
-        elif operation_type == "calculation":
-            if not readable.lower().startswith("calculate"):
-                readable = f"Calculate {readable}"
-        
-        return readable
+        """Use formatter to generate human-readable label."""
+        return self.formatter.humanize_identifier(call_name, operation_type)
 
     def _analyze_code_statements(self, func: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -151,234 +132,340 @@ class FlowchartService:
         
         return statements
 
+    def _build_flowchart_from_body(self, body: list, prev_node: str, mermaid_lines: list) -> str:
+        """
+        Build flowchart from detailed body structure.
+        Returns the ID of the last node created.
+        """
+        current_node = prev_node
+        
+        for stmt in body:
+            stmt_type = stmt.get("type", "")
+            
+            if stmt_type == "if_elif_else":
+                # Handle if-elif-else chain
+                conditions = stmt.get("conditions", [])
+                merge_node = self._generate_node_id("Merge")
+                
+                for idx, cond in enumerate(conditions):
+                    test = cond.get("test", "")
+                    body_stmts = cond.get("body", [])
+                    
+                    if test == "else":
+                        # Else branch
+                        else_node = self._generate_node_id("Else")
+                        mermaid_lines.append(f'    {else_node}["Else Branch"]:::processStyle')
+                        mermaid_lines.append(f'    {current_node} -->|No| {else_node}')
+                        
+                        # Process else body
+                        last_else = self._build_flowchart_from_body(body_stmts, else_node, mermaid_lines)
+                        mermaid_lines.append(f'    {last_else} --> {merge_node}')
+                    else:
+                        # If or elif condition
+                        cond_node = self._generate_node_id("Cond")
+                        formatted_test = self._format_condition_label(test)
+                        mermaid_lines.append(f'    {cond_node}{{{{{self._sanitize_label(formatted_test)}?}}}}:::decisionStyle')
+                        
+                        if idx == 0:
+                            # First condition connects from previous node
+                            mermaid_lines.append(f'    {current_node} --> {cond_node}')
+                        else:
+                            # Subsequent conditions connect from previous condition's No branch
+                            mermaid_lines.append(f'    {current_node} -->|No| {cond_node}')
+                        
+                        # Process condition body
+                        if body_stmts:
+                            # Check if body contains a return statement
+                            has_return = any(s.get("type") == "return" for s in body_stmts)
+                            
+                            if has_return:
+                                # Build the body and connect to End directly
+                                last_body = self._build_flowchart_from_body(body_stmts, cond_node, mermaid_lines)
+                                # Don't connect to merge, return goes to End
+                            else:
+                                # Build the body and connect to merge
+                                last_body = self._build_flowchart_from_body(body_stmts, cond_node, mermaid_lines)
+                                mermaid_lines.append(f'    {last_body} --> {merge_node}')
+                        else:
+                            # Empty body, connect Yes branch to merge
+                            yes_node = self._generate_node_id("Yes")
+                            mermaid_lines.append(f'    {yes_node}["True Branch"]:::processStyle')
+                            mermaid_lines.append(f'    {cond_node} -->|Yes| {yes_node}')
+                            mermaid_lines.append(f'    {yes_node} --> {merge_node}')
+                        
+                        current_node = cond_node
+                
+                # If no else clause, connect last condition's No to merge
+                if not any(c.get("test") == "else" for c in conditions):
+                    mermaid_lines.append(f'    {current_node} -->|No| {merge_node}')
+                
+                mermaid_lines.append(f'    {merge_node}["Continue"]:::processStyle')
+                current_node = merge_node
+                
+            elif stmt_type == "for_loop":
+                # Handle for loop
+                loop_node = self._generate_node_id("Loop")
+                loop_body_node = self._generate_node_id("LoopBody")
+                exit_node = self._generate_node_id("Exit")
+                
+                condition = stmt.get("condition", stmt.get("iter", ""))
+                formatted_cond = self._format_condition_label(f"For {condition}")
+                mermaid_lines.append(f'    {loop_node}{{{{{self._sanitize_label(formatted_cond)}?}}}}:::loopStyle')
+                mermaid_lines.append(f'    {current_node} --> {loop_node}')
+                
+                # Loop body
+                body_stmts = stmt.get("body", [])
+                if body_stmts:
+                    last_body = self._build_flowchart_from_body(body_stmts, loop_node, mermaid_lines)
+                    mermaid_lines.append(f'    {last_body} --> {loop_node}')
+                else:
+                    mermaid_lines.append(f'    {loop_body_node}["Loop Body"]:::processStyle')
+                    mermaid_lines.append(f'    {loop_node} -->|Continue| {loop_body_node}')
+                    mermaid_lines.append(f'    {loop_body_node} --> {loop_node}')
+                
+                mermaid_lines.append(f'    {exit_node}["Exit Loop"]:::processStyle')
+                mermaid_lines.append(f'    {loop_node} -->|Done| {exit_node}')
+                current_node = exit_node
+                
+            elif stmt_type == "while_loop":
+                # Handle while loop
+                loop_node = self._generate_node_id("While")
+                loop_body_node = self._generate_node_id("WhileBody")
+                exit_node = self._generate_node_id("WhileExit")
+                
+                condition = stmt.get("condition", "")
+                formatted_cond = self._format_condition_label(f"While {condition}")
+                mermaid_lines.append(f'    {loop_node}{{{{{self._sanitize_label(formatted_cond)}?}}}}:::loopStyle')
+                mermaid_lines.append(f'    {current_node} --> {loop_node}')
+                
+                # Loop body
+                body_stmts = stmt.get("body", [])
+                if body_stmts:
+                    last_body = self._build_flowchart_from_body(body_stmts, loop_node, mermaid_lines)
+                    mermaid_lines.append(f'    {last_body} --> {loop_node}')
+                else:
+                    mermaid_lines.append(f'    {loop_body_node}["Loop Body"]:::processStyle')
+                    mermaid_lines.append(f'    {loop_node} -->|Continue| {loop_body_node}')
+                    mermaid_lines.append(f'    {loop_body_node} --> {loop_node}')
+                
+                mermaid_lines.append(f'    {exit_node}["Exit Loop"]:::processStyle')
+                mermaid_lines.append(f'    {loop_node} -->|Done| {exit_node}')
+                current_node = exit_node
+                
+            elif stmt_type == "return":
+                # Handle return statement
+                return_node = self._generate_node_id("Return")
+                value = stmt.get("value", "")
+                label = self._format_return_label(value)
+                mermaid_lines.append(f'    {return_node}["{label}"]:::returnStyle')
+                mermaid_lines.append(f'    {current_node} --> {return_node}')
+                mermaid_lines.append(f'    {return_node} --> End')
+                current_node = return_node
+                
+            elif stmt_type == "break":
+                break_node = self._generate_node_id("Break")
+                mermaid_lines.append(f'    {break_node}["⚠️ Break Loop"]:::controlStyle')
+                mermaid_lines.append(f'    {current_node} --> {break_node}')
+                current_node = break_node
+                
+            elif stmt_type == "continue":
+                continue_node = self._generate_node_id("Continue")
+                mermaid_lines.append(f'    {continue_node}["↻ Continue"]:::controlStyle')
+                mermaid_lines.append(f'    {current_node} --> {continue_node}')
+                current_node = continue_node
+                
+            elif stmt_type == "assignment":
+                assign_node = self._generate_node_id("Assign")
+                targets = stmt.get("targets", [])
+                value = stmt.get("value", "")
+                target_str = ", ".join(str(t) for t in targets) if targets else "variable"
+                label = f"{target_str} = {self._sanitize_label(str(value))}"
+                mermaid_lines.append(f'    {assign_node}["{label}"]:::processStyle')
+                mermaid_lines.append(f'    {current_node} --> {assign_node}')
+                current_node = assign_node
+                
+            elif stmt_type == "call":
+                call_node = self._generate_node_id("Call")
+                function = stmt.get("function", "")
+                label = f"Call {self._sanitize_label(str(function))}"
+                mermaid_lines.append(f'    {call_node}["{label}"]:::processStyle')
+                mermaid_lines.append(f'    {current_node} --> {call_node}')
+                current_node = call_node
+        
+        return current_node
+
+    @cached_diagram('flowchart')
     def build(self, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
         if not parsed_data or "functions" not in parsed_data:
             return {"error": "Invalid parsed data for flowchart."}
 
         self.node_counter = 0
-        mermaid_code = "flowchart TD\n"
+        mermaid_lines = []
+        mermaid_lines.append("flowchart TD")
         
         # Start node
         start_id = "Start"
-        mermaid_code += f'    {start_id}([Start])\n'
+        mermaid_lines.append(f'    {start_id}([Start]):::startEndStyle')
         prev_node = start_id
 
         functions = parsed_data.get("functions", [])
+        metadata = parsed_data.get("metadata", {})
+        
+        # Add project summary if available (from smart merging)
+        if metadata:
+            total_funcs = metadata.get('total_functions', 0)
+            selected = metadata.get('selected_functions', 0)
+            filtered = metadata.get('filtered_out', 0)
+            
+            if filtered > 0:
+                summary_node = "Summary"
+                summary_text = f"Showing {selected}/{total_funcs} functions (filtered {filtered} trivial)"
+                mermaid_lines.append(f'    {summary_node}["{summary_text}"]:::summaryStyle')
+                mermaid_lines.append(f'    {prev_node} --> {summary_node}')
+                prev_node = summary_node
         
         # Process each function or main block
         for func_idx, func in enumerate(functions):
             func_name = func.get('name', 'function')
-            calls = func.get("calls", [])
-            control_flows = func.get("control_flow", [])
+            body = func.get("body", [])
+            args = func.get("args", [])
             
-            # For main block - create detailed step-by-step flow
-            if func_name == "main":
-                # Analyze the operations in main using NLP
-                has_input = any(self._extract_operation_type(c) == "input" for c in calls)
-                has_output = any(self._extract_operation_type(c) == "output" for c in calls)
-                processing_calls = [c for c in calls if self._extract_operation_type(c) not in ["input", "output"]]
+            # If function has detailed body, use it
+            if body:
+                # Add function entry node (except for main)
+                if func_name != "main":
+                    func_node = self._generate_node_id("Func")
+                    label = self._generate_semantic_label(func_name, "process")
+                    mermaid_lines.append(f'    {func_node}["{label}"]:::functionStyle')
+                    mermaid_lines.append(f'    {prev_node} --> {func_node}')
+                    prev_node = func_node
                 
-                # Initialization/Input step
-                if has_input or calls:
-                    init_id = self._generate_node_id("Init")
-                    if has_input:
-                        mermaid_code += f'    {init_id}[/"Get Input"/]\n'
-                    else:
-                        mermaid_code += f'    {init_id}["Initialization"]\n'
-                    mermaid_code += f'    {prev_node} --> {init_id}\n'
-                    prev_node = init_id
+                # Add input parameters if any
+                if args and func_name != "main":
+                    input_node = self._generate_node_id("Input")
+                    args_str = ", ".join(str(a) for a in args)
+                    mermaid_lines.append(f'    {input_node}[/"📥 Input: {args_str}"/]:::inputStyle')
+                    mermaid_lines.append(f'    {prev_node} --> {input_node}')
+                    prev_node = input_node
                 
-                # Processing step (if there are operations beyond I/O)
-                if processing_calls:
-                    proc_id = self._generate_node_id("Proc")
-                    # Use NLP to generate semantic label
-                    if self.nlp and processing_calls:
-                        first_call = processing_calls[0]
-                        op_type = self._extract_operation_type(first_call)
-                        label = self._generate_semantic_label(first_call, op_type)
-                        mermaid_code += f'    {proc_id}["{label}"]\n'
-                    else:
-                        mermaid_code += f'    {proc_id}["Processing Data"]\n'
-                    mermaid_code += f'    {prev_node} --> {proc_id}\n'
-                    prev_node = proc_id
+                # Build flowchart from detailed body
+                prev_node = self._build_flowchart_from_body(body, prev_node, mermaid_lines)
                 
-                # Control flow structures
-                for ctrl in control_flows:
-                    ctrl_id = self._generate_node_id("Ctrl")
-                    mermaid_code += f'    {ctrl_id}{{{{{ctrl} Condition}}}}\n'
-                    mermaid_code += f'    {prev_node} --> {ctrl_id}\n'
-                    
-                    # Add True/False branches for decisions
-                    if ctrl == "If":
-                        true_id = self._generate_node_id("True")
-                        false_id = self._generate_node_id("False")
-                        mermaid_code += f'    {true_id}["True Branch"]\n'
-                        mermaid_code += f'    {false_id}["False Branch"]\n'
-                        mermaid_code += f'    {ctrl_id} -->|Yes| {true_id}\n'
-                        mermaid_code += f'    {ctrl_id} -->|No| {false_id}\n'
-                        
-                        # Merge back
-                        merge_id = self._generate_node_id("Merge")
-                        mermaid_code += f'    {merge_id}["Continue"]\n'
-                        mermaid_code += f'    {true_id} --> {merge_id}\n'
-                        mermaid_code += f'    {false_id} --> {merge_id}\n'
-                        prev_node = merge_id
-                    elif ctrl in ["For", "While"]:
-                        loop_body = self._generate_node_id("Loop")
-                        mermaid_code += f'    {loop_body}["Loop Body"]\n'
-                        mermaid_code += f'    {ctrl_id} -->|Continue| {loop_body}\n'
-                        mermaid_code += f'    {loop_body} --> {ctrl_id}\n'
-                        
-                        exit_id = self._generate_node_id("Exit")
-                        mermaid_code += f'    {exit_id}["Exit Loop"]\n'
-                        mermaid_code += f'    {ctrl_id} -->|Done| {exit_id}\n'
-                        prev_node = exit_id
-                    else:
-                        prev_node = ctrl_id
-                
-                # Output step
-                if has_output:
-                    out_id = self._generate_node_id("Out")
-                    mermaid_code += f'    {out_id}[/"Output Result"/]\n'
-                    mermaid_code += f'    {prev_node} --> {out_id}\n'
-                    prev_node = out_id
-                        
             else:
-                # For defined functions - use NLP to understand and label
-                func_id = self._generate_node_id("Func")
-                label = self._generate_semantic_label(func_name, "process")
-                mermaid_code += f'    {func_id}["{label}"]\n'
-                mermaid_code += f'    {prev_node} --> {func_id}\n'
-                prev_node = func_id
+                # Fallback to old method if no detailed body available
+                calls = func.get("calls", [])
+                control_flows = func.get("control_flow", [])
                 
-                # Show function internals using NLP analysis
-                statements = self._analyze_code_statements(func)
-                for stmt in statements:
-                    stmt_id = self._generate_node_id("Stmt")
-                    label = self._sanitize_label(stmt["label"])
+                # For main block - create detailed step-by-step flow
+                if func_name == "main":
+                    # Analyze the operations in main using NLP
+                    has_input = any(self._extract_operation_type(c) == "input" for c in calls)
+                    has_output = any(self._extract_operation_type(c) == "output" for c in calls)
+                    processing_calls = [c for c in calls if self._extract_operation_type(c) not in ["input", "output"]]
                     
-                    if stmt["type"] == "decision":
-                        mermaid_code += f'    {stmt_id}{{{{{label}}}}}\n'
-                    elif stmt["type"] == "output" or stmt["type"] == "input":
-                        mermaid_code += f'    {stmt_id}[/"{label}"/]\n'
-                    else:
-                        mermaid_code += f'    {stmt_id}["{label}"]\n'
+                    # Initialization/Input step
+                    if has_input or calls:
+                        init_id = self._generate_node_id("Init")
+                        if has_input:
+                            mermaid_lines.append(f'    {init_id}[/"📥 Get Input"/]:::inputStyle')
+                        else:
+                            mermaid_lines.append(f'    {init_id}["Initialization"]:::processStyle')
+                        mermaid_lines.append(f'    {prev_node} --> {init_id}')
+                        prev_node = init_id
                     
-                    mermaid_code += f'    {prev_node} --> {stmt_id}\n'
-                    prev_node = stmt_id
-
-        # End node
-        end_id = "End"
-        mermaid_code += f'    {end_id}([End])\n'
-        mermaid_code += f'    {prev_node} --> {end_id}\n'
-
-        return {
-            "language": parsed_data.get("language", "unknown"),
-            "mermaid": mermaid_code
-        }
-        if not parsed_data or "functions" not in parsed_data:
-            return {"error": "Invalid parsed data for flowchart."}
-
-        self.node_counter = 0
-        mermaid_code = "flowchart TD\n"
-        
-        # Start node
-        start_id = "Start"
-        mermaid_code += f'    {start_id}([Start])\n'
-        prev_node = start_id
-
-        functions = parsed_data.get("functions", [])
-        
-        # Process each function or main block
-        for func_idx, func in enumerate(functions):
-            func_name = func.get('name', 'function')
-            calls = func.get("calls", [])
-            control_flows = func.get("control_flow", [])
-            
-            # For main block - create detailed step-by-step flow
-            if func_name == "main":
-                # Analyze the operations in main
-                statements = []
-                
-                # Detect initialization (assignments, variable declarations)
-                if calls:
-                    # Check for common patterns
-                    has_input = any(c in ["input", "eval", "int"] for c in calls)
-                    has_output = any(c in ["print"] for c in calls)
-                    
-                    # Initialization step
-                    init_id = self._generate_node_id("Init")
-                    mermaid_code += f'    {init_id}["Initialization"]\n'
-                    mermaid_code += f'    {prev_node} --> {init_id}\n'
-                    prev_node = init_id
-                    
-                    # Processing/operations step
-                    if len(calls) > 1:
+                    # Processing step (if there are operations beyond I/O)
+                    if processing_calls:
                         proc_id = self._generate_node_id("Proc")
-                        # Determine operation type from code context
-                        mermaid_code += f'    {proc_id}["Processing Data"]\n'
-                        mermaid_code += f'    {prev_node} --> {proc_id}\n'
+                        # Use NLP to generate semantic label
+                        if self.nlp and processing_calls:
+                            first_call = processing_calls[0]
+                            op_type = self._extract_operation_type(first_call)
+                            label = self._generate_semantic_label(first_call, op_type)
+                            mermaid_lines.append(f'    {proc_id}["{label}"]:::processStyle')
+                        else:
+                            mermaid_lines.append(f'    {proc_id}["Processing Data"]:::processStyle')
+                        mermaid_lines.append(f'    {prev_node} --> {proc_id}')
                         prev_node = proc_id
+                    
+                    # Control flow structures
+                    for ctrl in control_flows:
+                        ctrl_id = self._generate_node_id("Ctrl")
+                        mermaid_lines.append(f'    {ctrl_id}{{{{{ctrl} Condition}}}}:::decisionStyle')
+                        mermaid_lines.append(f'    {prev_node} --> {ctrl_id}')
+                        
+                        # Add True/False branches for decisions
+                        if ctrl == "If":
+                            true_id = self._generate_node_id("True")
+                            false_id = self._generate_node_id("False")
+                            mermaid_lines.append(f'    {true_id}["True Branch"]:::processStyle')
+                            mermaid_lines.append(f'    {false_id}["False Branch"]:::processStyle')
+                            mermaid_lines.append(f'    {ctrl_id} -->|Yes| {true_id}')
+                            mermaid_lines.append(f'    {ctrl_id} -->|No| {false_id}')
+                            
+                            # Merge back
+                            merge_id = self._generate_node_id("Merge")
+                            mermaid_lines.append(f'    {merge_id}["Continue"]:::processStyle')
+                            mermaid_lines.append(f'    {true_id} --> {merge_id}')
+                            mermaid_lines.append(f'    {false_id} --> {merge_id}')
+                            prev_node = merge_id
+                        elif ctrl in ["For", "While"]:
+                            loop_body = self._generate_node_id("Loop")
+                            mermaid_lines.append(f'    {loop_body}["Loop Body"]:::processStyle')
+                            mermaid_lines.append(f'    {ctrl_id} -->|Continue| {loop_body}')
+                            mermaid_lines.append(f'    {loop_body} --> {ctrl_id}')
+                            
+                            exit_id = self._generate_node_id("Exit")
+                            mermaid_lines.append(f'    {exit_id}["Exit Loop"]:::processStyle')
+                            mermaid_lines.append(f'    {ctrl_id} -->|Done| {exit_id}')
+                            prev_node = exit_id
+                        else:
+                            prev_node = ctrl_id
                     
                     # Output step
                     if has_output:
                         out_id = self._generate_node_id("Out")
-                        mermaid_code += f'    {out_id}["Output Result"]\n'
-                        mermaid_code += f'    {prev_node} --> {out_id}\n'
+                        mermaid_lines.append(f'    {out_id}[/"📤 Output Result"/]:::inputStyle')
+                        mermaid_lines.append(f'    {prev_node} --> {out_id}')
                         prev_node = out_id
-                
-                # Add control flow structures
-                for ctrl in control_flows:
-                    ctrl_id = self._generate_node_id("Ctrl")
-                    mermaid_code += f'    {ctrl_id}{{{{{ctrl} Condition}}}}\n'
-                    mermaid_code += f'    {prev_node} --> {ctrl_id}\n'
+                            
+                else:
+                    # For defined functions - use NLP to understand and label
+                    func_id = self._generate_node_id("Func")
+                    label = self._generate_semantic_label(func_name, "process")
+                    mermaid_lines.append(f'    {func_id}["{label}"]:::functionStyle')
+                    mermaid_lines.append(f'    {prev_node} --> {func_id}')
+                    prev_node = func_id
                     
-                    # Add True/False branches for decisions
-                    if ctrl in ["If"]:
-                        true_id = self._generate_node_id("True")
-                        false_id = self._generate_node_id("False")
-                        mermaid_code += f'    {true_id}["True Branch"]\n'
-                        mermaid_code += f'    {false_id}["False Branch"]\n'
-                        mermaid_code += f'    {ctrl_id} -->|Yes| {true_id}\n'
-                        mermaid_code += f'    {ctrl_id} -->|No| {false_id}\n'
+                    # Show function internals using NLP analysis
+                    statements = self._analyze_code_statements(func)
+                    for stmt in statements:
+                        stmt_id = self._generate_node_id("Stmt")
+                        label = self._sanitize_label(stmt["label"])
                         
-                        # Merge back
-                        merge_id = self._generate_node_id("Merge")
-                        mermaid_code += f'    {merge_id}["Continue"]\n'
-                        mermaid_code += f'    {true_id} --> {merge_id}\n'
-                        mermaid_code += f'    {false_id} --> {merge_id}\n'
-                        prev_node = merge_id
-                    else:
-                        prev_node = ctrl_id
+                        if stmt["type"] == "decision":
+                            mermaid_lines.append(f'    {stmt_id}{{{{{label}}}}}')
+                        elif stmt["type"] == "output" or stmt["type"] == "input":
+                            mermaid_lines.append(f'    {stmt_id}[/"{label}"/]')
+                        else:
+                            mermaid_lines.append(f'    {stmt_id}["{label}"]')
                         
-            else:
-                # For defined functions - show as process box
-                func_id = self._generate_node_id("Func")
-                label = self._sanitize_label(f"{func_name}()")
-                mermaid_code += f'    {func_id}["{label}"]\n'
-                mermaid_code += f'    {prev_node} --> {func_id}\n'
-                prev_node = func_id
-                
-                # Show function internals
-                statements = self._analyze_code_statements(func)
-                for stmt in statements:
-                    stmt_id = self._generate_node_id("Stmt")
-                    label = self._sanitize_label(stmt["label"])
-                    
-                    if stmt["type"] == "decision":
-                        mermaid_code += f'    {stmt_id}{{{{{label}}}}}\n'
-                    elif stmt["type"] == "output" or stmt["type"] == "input":
-                        mermaid_code += f'    {stmt_id}[/"{label}"/]\n'
-                    else:
-                        mermaid_code += f'    {stmt_id}["{label}"]\n'
-                    
-                    mermaid_code += f'    {prev_node} --> {stmt_id}\n'
-                    prev_node = stmt_id
+                        mermaid_lines.append(f'    {prev_node} --> {stmt_id}')
+                        prev_node = stmt_id
 
         # End node
         end_id = "End"
-        mermaid_code += f'    {end_id}([End])\n'
-        mermaid_code += f'    {prev_node} --> {end_id}\n'
+        mermaid_lines.append(f'    {end_id}([End]):::startEndStyle')
+        mermaid_lines.append(f'    {prev_node} --> {end_id}')
+
+        # Add Mermaid CSS styles
+        mermaid_lines.append("")
+        mermaid_lines.append(self._get_mermaid_styles())
+
+        mermaid_code = "\n".join(mermaid_lines) + "\n"
+        
+        # Debug logging
+        logger.info(f"Generated flowchart with {len(mermaid_lines)} lines")
+        logger.debug(f"First 500 chars of mermaid: {mermaid_code[:500]}")
 
         return {
             "language": parsed_data.get("language", "unknown"),

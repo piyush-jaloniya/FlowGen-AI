@@ -7,7 +7,7 @@ __pycache__/
 venv/
 env/
 ENV/
-.venv
+.venv/
 
 # Environment variables
 .env
@@ -34,6 +34,12 @@ build/
 # Logs
 *.log
 logs/
+
+# Local app/cache artifacts
+backend/.ai_insights_usage.json
+.mypy_cache/
+.ruff_cache/
+.cache/
 
 # Testing
 .coverage

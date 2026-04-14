@@ -11,6 +11,7 @@ Transform your code into beautiful, interactive diagrams automatically!
 ## ✨ Features
 
 ### 🎯 Core Features
+
 - **Multi-Language Support**: Python, JavaScript, Java, C, C++
 - **Dual Visualization**: Flowcharts (detailed logic) + Workflows (high-level steps)
 - **Three Input Modes**: Code snippet, file upload, or entire project folder
@@ -18,12 +19,14 @@ Transform your code into beautiful, interactive diagrams automatically!
 - **Export Options**: JSON, PNG, Mermaid (.mmd) formats
 
 ### 🤖 AI-Powered (Optional)
+
 - **Code Descriptions**: Natural language explanations
 - **Algorithm Detection**: Auto-identify sorting, searching, recursion, etc.
 - **Smart Suggestions**: Code improvement recommendations
 - **FREE with Groq API!** (14,400 requests/day)
 
 ### 🎨 Modern UI
+
 - Dark theme with gradient accents
 - Monaco code editor with syntax highlighting
 - Vertical diagram layout
@@ -33,6 +36,7 @@ Transform your code into beautiful, interactive diagrams automatically!
 ## 🚀 Quick Start
 
 ### Prerequisites
+
 - Python 3.11+
 - Node.js 16+
 - Git
@@ -41,8 +45,8 @@ Transform your code into beautiful, interactive diagrams automatically!
 
 ```bash
 # Clone the repository
-git clone https://github.com/piyush-jaloniya/flowgen-ai.git
-cd flowgen-ai
+git clone https://github.com/piyush-jaloniya/FlowGen-AI.git
+cd FlowGen-AI
 
 # Backend setup
 cd backend
@@ -67,23 +71,27 @@ cd frontend
 npm start
 ```
 
-App opens at **http://localhost:3000** 🎉
+App opens at **<http://localhost:3000>** 🎉
 
 ## 🆓 Enable FREE AI Features (Optional)
 
 Get smarter code analysis in 3 minutes!
 
-1. **Get free Groq API key**: https://console.groq.com/keys
+1. **Get free Groq API key**: <https://console.groq.com/keys>
 2. **Create `.env`**:
+
    ```bash
    cd backend
    copy .env.example .env
    ```
+
 3. **Add your key** to `backend/.env`:
+
    ```env
    GROQ_API_KEY=gsk_your_key_here
    GROQ_MODEL=llama-3.1-70b-versatile
    ```
+
 4. **Done!** Backend auto-reloads. See AI insights when you generate diagrams.
 
 📖 **Full guide**: [GROQ_SETUP.md](GROQ_SETUP.md)
@@ -91,16 +99,19 @@ Get smarter code analysis in 3 minutes!
 ## 📖 Usage
 
 ### 1. Code Snippet Mode
+
 - Select language (Python, JavaScript, Java, C, C++)
 - Paste or write code
 - Click "Generate Diagrams"
 
 ### 2. File Upload Mode
+
 - Click "Upload File"
 - Select `.py`, `.js`, `.java`, `.c`, `.cpp` files
 - Supports multiple files!
 
 ### 3. Project Folder Mode
+
 - ZIP your project folder
 - Upload the ZIP file
 - Analyzes all code files automatically
@@ -108,12 +119,14 @@ Get smarter code analysis in 3 minutes!
 ## 🎨 Tech Stack
 
 **Frontend:**
+
 - React 18.2
 - Monaco Editor (VS Code editor)
 - Mermaid.js (diagram rendering)
 - Axios (API calls)
 
 **Backend:**
+
 - FastAPI (Python web framework)
 - spaCy (NLP for semantic analysis)
 - Tree-sitter (C/C++ parsing)
@@ -121,6 +134,7 @@ Get smarter code analysis in 3 minutes!
 - Javalang (Java parsing)
 
 **AI/ML (Optional):**
+
 - Groq API (free LLM)
 - OpenAI API (alternative)
 
@@ -152,6 +166,7 @@ Get smarter code analysis in 3 minutes!
 ## 🤝 Contributing
 
 Contributions welcome! Please:
+
 1. Fork the repo
 2. Create a feature branch
 3. Submit a pull request
@@ -172,4 +187,5 @@ MIT License - feel free to use for any purpose!
 **Made with ❤️ for developers who love visual code understanding**
 
 ⭐ Star this repo if you find it useful!
+
 # FlowGen-AI

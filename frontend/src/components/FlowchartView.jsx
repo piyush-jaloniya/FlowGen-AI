@@ -10,7 +10,8 @@ const Flowchart = () => {
 
     const generateFlowchart = async () => {
         try {
-            const response = await axios.post("http://127.0.0.1:8000/api/analyze", {
+            const API_URL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000/api";
+            const response = await axios.post(`${API_URL}/analyze`, {
                 filename: "test.js",
                 content: code,
             });
