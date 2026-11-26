@@ -9,6 +9,7 @@ const codeHighlight = get('highlight');
 const language = get('language');
 const graphArea = get('graph');
 const viewport = get('viewport');
+const compact = window.matchMedia('(max-width: 510px)');
 const details = get('details');
 const select = get('scope');
 const messages = get('messages');
@@ -244,7 +245,7 @@ function render(graph) {
   closeDetails();
   graphArea.replaceChildren();
   state.graph = graph;
-  state.drawing = graph?.nodes.length ? drawGraph(graph, openDetails) : null;
+  state.drawing = graph?.nodes.length ? drawGraph(graph, openDetails, compact.matches ? 2 : 6) : null;
   if (state.drawing) {
     graphArea.append(state.drawing.svg);
     fit(false);
@@ -385,6 +386,9 @@ get('expand').addEventListener('click', () => expand(!diagramPanel.classList.con
 new ResizeObserver(() => {
   if (state.fitMode) fit(state.fitMode === 'full');
 }).observe(viewport);
+compact.addEventListener('change', () => {
+  if (state.graph) render(state.graph);
+});
 exportToggle.addEventListener('click', () => setExport(exportMenu.hidden));
 exportMenu.addEventListener('click', event => {
   const { format } = event.target.dataset;

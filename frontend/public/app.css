@@ -138,4 +138,5 @@ select { accent-color: var(--accent); color: #e6e5f6; background: #202235; borde
   .intro { flex-wrap: wrap; align-items: start; }
   .panel { padding: 11px; }
   .diagram-controls { align-items: start; flex-direction: column; }
+  .diagram-panel:not(.expanded) .viewport { height: min(460px, 65vh); }
 }

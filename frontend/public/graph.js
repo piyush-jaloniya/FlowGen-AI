@@ -34,13 +34,13 @@ function uniqueEdges(edges) {
   }));
 }
 
-function arrange(graph, edges) {
+function arrange(graph, edges, columns) {
   const positions = new Map();
   const nodes = graph.nodes.map(node => node.id);
   if (graph.mode === 'overview') {
-    const columns = Math.min(5, Math.max(1, Math.ceil(Math.sqrt(nodes.length))));
-    nodes.forEach((id, i) => positions.set(id, { x: 139 + (i % columns) * 212, y: 63 + Math.floor(i / columns) * 112 }));
-    return { positions, width: 278 + (columns - 1) * 212, height: 128 + Math.floor((nodes.length - 1) / columns) * 112 };
+    const gridWidth = Math.min(columns, 5, Math.max(1, Math.ceil(Math.sqrt(nodes.length))));
+    nodes.forEach((id, i) => positions.set(id, { x: 139 + (i % gridWidth) * 212, y: 63 + Math.floor(i / gridWidth) * 112 }));
+    return { positions, width: 278 + (gridWidth - 1) * 212, height: 128 + Math.floor((nodes.length - 1) / gridWidth) * 112 };
   }
   const outgoing = new Map(nodes.map(id => [id, []]));
   const incoming = new Map(nodes.map(id => [id, 0]));
@@ -78,11 +78,11 @@ function arrange(graph, edges) {
     }
   }
   const widest = Math.max(1, ...rows.map(row => row.length));
-  const width = 316 + (Math.min(6, widest) - 1) * 200;
+  const width = 316 + (Math.min(columns, widest) - 1) * 200;
   let y = 58;
   for (const row of rows) {
-    for (let i = 0; i < row.length; i += 6) {
-      const line = row.slice(i, i + 6);
+    for (let i = 0; i < row.length; i += columns) {
+      const line = row.slice(i, i + columns);
       line.forEach((id, column) => positions.set(id, { x: width / 2 + (column - (line.length - 1) / 2) * 200, y }));
       y += 100;
     }
@@ -149,10 +149,10 @@ function labelLines(label, length) {
   return lines.slice(0, 2);
 }
 
-export function drawGraph(graph, selectNode) {
+export function drawGraph(graph, selectNode, columns = 6) {
   const edges = uniqueEdges(graph.edges);
   const kinds = new Map(graph.nodes.map(node => [node.id, node.kind]));
-  const { positions, width, height } = arrange(graph, edges);
+  const { positions, width, height } = arrange(graph, edges, columns);
   const svg = svgElement('svg', { width, height, viewBox: '0 0 ' + width + ' ' + height,
     role: 'group', 'aria-label': graph.title, 'font-family': 'Segoe UI, Arial, sans-serif' });
   const direction = svgElement('marker', { id: 'flow-arrow', viewBox: '0 0 10 10', refX: 9, refY: 5,
@@ -184,7 +184,7 @@ export function drawGraph(graph, selectNode) {
     group.append(shape(node, x, y, attrs));
     const lines = labelLines(node.label, node.kind === 'decision' ? 18 : 23);
     lines.forEach((line, i) => group.append(svgElement('text', { x, y: y + 4 + (i - (lines.length - 1) / 2) * 15,
-      'text-anchor': 'middle', fill: '#f1effa', 'font-size': 12, 'font-weight': 600 }, line)));
+      'text-anchor': 'middle', fill: '#f1effa', 'font-size': 13, 'font-weight': 600 }, line)));
     if (node.path && selectNode) {
       group.setAttribute('tabindex', 0);
       group.setAttribute('role', 'button');
