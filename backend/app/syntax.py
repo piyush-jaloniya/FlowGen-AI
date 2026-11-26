@@ -221,12 +221,43 @@ def call_name(source, node):
     return source.text(field(node, "function", "constructor", "type"))
 
 
+def called_lambda(node):
+    callee = field(node, "function")
+    while callee is not None and callee.type == "parenthesized_expression":
+        callee = next((part for part in callee.named_children if part.type != "comment"), None)
+    return callee if callee is not None and callee.type == "lambda" else None
+
+
 def direct_calls(source, root, *, stop=()):
     if root is None:
         return []
     calls = []
-    for node in walk(root, FUNCTIONS | CLASSES | set(stop)):
+    boundaries = FUNCTIONS | CLASSES | set(stop)
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type == "lambda":
+            expression = node.parent
+            while expression is not None and expression.type == "parenthesized_expression":
+                expression = expression.parent
+            if (
+                expression is not None
+                and expression.type == "call"
+                and called_lambda(expression) == node
+            ):
+                body = field(node, "body")
+                if body is not None:
+                    pending.append(body)
+            parameters = field(node, "parameters")
+            if parameters is not None:
+                pending.append(parameters)
+            continue
+        if node.type in boundaries:
+            continue
+        pending.extend(reversed(node.named_children))
         if node.type not in CALLS:
+            continue
+        if node.type == "call" and called_lambda(node) is not None:
             continue
         name = call_name(source, node)
         if name:
@@ -234,6 +265,25 @@ def direct_calls(source, root, *, stop=()):
                 Call(re.sub(r"\s*(::|->|\?\.|\.)\s*", ".", name), *source_position(node), node)
             )
     return calls
+
+
+def irrefutable_python_pattern(pattern):
+    if pattern is None:
+        return False
+    pending = [pattern]
+    while pending:
+        node = pending.pop()
+        if node.type == "_" or (
+            node.type == "dotted_name" and not any(child.type == "." for child in node.children)
+        ):
+            return True
+        if node.type in {"case_pattern", "union_pattern"}:
+            pending.extend(child for child in node.children if child.is_named or child.type == "_")
+        elif node.type == "as_pattern" and node.named_children:
+            pending.append(node.named_children[0])
+        elif node.type == "tuple_pattern" and not any(child.type == "," for child in node.children):
+            pending.extend(node.named_children)
+    return False
 
 
 def python_bindings(source):
@@ -272,7 +322,7 @@ def python_bindings(source):
             stack.extend(ast.iter_child_nodes(node))
 
 
-def python_comprehension_shadows(source, node, name):
+def python_expression_binding(source, node, name):
     offset = node.start_byte
     parent = node.parent
     while parent is not None:
@@ -298,9 +348,29 @@ def python_comprehension_shadows(source, node, name):
             if name in bound and not (
                 iterable is not None and iterable.start_byte <= offset < iterable.end_byte
             ):
-                return True
+                return "Name is bound by a comprehension"
+        elif parent.type == "lambda":
+            body = field(parent, "body")
+            parameters = field(parent, "parameters")
+            if (
+                parameters is not None
+                and body is not None
+                and body.start_byte <= offset < body.end_byte
+            ):
+                for parameter in parameters.named_children:
+                    binding = parameter
+                    if binding.type == "default_parameter":
+                        binding = field(parameter, "name")
+                    elif binding.type in {"list_splat_pattern", "dictionary_splat_pattern"}:
+                        binding = next(iter(parameter.named_children), None)
+                    if (
+                        binding is not None
+                        and binding.type == "identifier"
+                        and source.text(binding) == name
+                    ):
+                        return "Name is bound by a lambda parameter"
         parent = parent.parent
-    return False
+    return None
 
 
 def import_info(source):

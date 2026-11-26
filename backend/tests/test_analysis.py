@@ -403,3 +403,23 @@ def test_cpp_typed_handler_leaves_unmatched_exceptions_possible(client, separato
     source = f"int main(){{ try {{ throw 1; }} catch{separator}(int value) {{ return value; }} }}"
     graph = report(client, file("main.cpp", source))["graph"]
     assert ("Which handler matches?", "Uncaught exception", "Uncaught") in labels(graph)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "can_fail"),
+    [
+        ("value", False),
+        ("(value)", False),
+        ("(_ as value)", False),
+        ("1 | _", False),
+        ("value if allowed(value)", True),
+        ("(value,)", True),
+        ("[value]", True),
+        ("Constants.VALUE", True),
+        ("1 as value", True),
+    ],
+)
+def test_python_match_only_falls_through_when_pattern_or_guard_can_fail(client, pattern, can_fail):
+    source = f"def main(x):\n    match x:\n        case {pattern}:\n            return 1\n"
+    graph = report(client, file("main.py", source))["graph"]
+    assert any(label == "No match" for _, _, label in labels(graph)) is can_fail

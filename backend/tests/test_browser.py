@@ -253,3 +253,30 @@ def test_directory_upload_ignores_nested_archives(page, tmp_path):
     expect(page.locator("#upload-summary")).to_have_text("1 selected · 1 skipped")
     page.get_by_role("button", name="Generate diagram").click()
     expect(page.locator("#graph svg")).to_have_attribute("aria-label", "Main")
+
+
+def test_failed_scope_and_view_changes_preserve_the_displayed_diagram(page):
+    editor = page.get_by_label("Source code")
+    editor.fill("def small():\n    return 1\n\ndef large():\n" + "    x = 1\n" * 310)
+    page.get_by_role("button", name="Generate diagram").click()
+    diagram = page.locator("#graph svg")
+    expect(diagram).to_have_attribute("aria-label", "Small")
+    scope = page.get_by_label("Diagram scope")
+    small = scope.input_value()
+    scope.select_option(label="Large · snippet.py:4")
+    expect(page.locator("#messages")).to_contain_text("Diagram exceeds 300 nodes")
+    expect(scope).to_have_value(small)
+    expect(diagram).to_have_attribute("aria-label", "Small")
+    expect(page.locator("#export-toggle")).to_be_enabled()
+
+    page.route(
+        "**/api/analyze",
+        lambda route: route.fulfill(status=503, json={"detail": "Analysis is busy."}),
+    )
+    page.get_by_role("button", name="Workflow", exact=True).click()
+    expect(page.locator("#messages")).to_contain_text("Analysis is busy.")
+    expect(page.get_by_role("button", name="Flowchart", exact=True)).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    expect(scope).to_have_value(small)
+    expect(diagram).to_have_attribute("aria-label", "Small")

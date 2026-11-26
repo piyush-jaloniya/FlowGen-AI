@@ -203,15 +203,19 @@ async function loadProject() {
 
 function redraw(view, symbolId) {
   if (state.generating) return;
-  setView(view);
   if (!state.report?.symbols.length) {
+    setView(view);
     updateScope();
     return;
   }
   const chosen = symbolId || state.scopeByView[view];
-  updateScope(chosen);
+  // Native selects change before the handler runs. Restore the displayed diagram's scope.
+  if (select.value !== state.graph?.symbolId && state.graph?.symbolId) {
+    select.value = state.graph.symbolId;
+  }
   return request('/api/analyze', { files: state.report.files, mode: view, symbolId: view === 'overview' ? null : chosen },
     data => {
+      setView(view);
       updateScope(data.graph?.symbolId);
       render(data.graph);
     });

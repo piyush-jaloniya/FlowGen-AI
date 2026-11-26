@@ -3,7 +3,15 @@
 from dataclasses import dataclass, replace
 
 from .model import AnalysisError, Graph, concise, humanize
-from .syntax import CLASSES, CONTAINERS, FUNCTIONS, direct_calls, field, source_position
+from .syntax import (
+    CLASSES,
+    CONTAINERS,
+    FUNCTIONS,
+    direct_calls,
+    field,
+    irrefutable_python_pattern,
+    source_position,
+)
 
 BRANCHES = {"if_statement", "elif_clause"}
 FOR_LOOPS = {"for_statement", "for_in_statement", "enhanced_for_statement", "for_range_loop"}
@@ -129,7 +137,7 @@ class FlowBuilder:
                 "decision", f"Case {pattern_text} {self.source.text(guard)}", clause
             )
             self.graph.edge(decision, body, "Match", "branch")
-            if pattern_text != "_" or guard is not None:
+            if guard is not None or not irrefutable_python_pattern(pattern):
                 self.graph.edge(decision, first, "No match", "branch")
             first = decision
         self.graph.edge(select, first)

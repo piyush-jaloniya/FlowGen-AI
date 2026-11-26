@@ -3,12 +3,13 @@
 import posixpath
 import re
 from collections import defaultdict, deque
+from functools import cached_property
 from pathlib import PurePosixPath
 
 from .flow import FlowBuilder
 from .javascript import Import, JSModule, Local, StaticClass
 from .model import LANGUAGES, MAX_SYMBOLS, AnalysisError, Graph, humanize
-from .syntax import parse_source, python_comprehension_shadows
+from .syntax import parse_source, python_expression_binding
 from .tsconfig import Configs, safe_relative
 
 MAX_TRACE_SYMBOLS = 80
@@ -17,6 +18,7 @@ MAX_EXPORT_LOOKUPS = 256
 JS_LANGUAGES = {"javascript", "typescript"}
 JS_EXTENSIONS = {extension for language in JS_LANGUAGES for extension in LANGUAGES[language]}
 C_LANGUAGES = {"c", "cpp"}
+C_HEADERS = {".h", ".hpp", ".hh", ".hxx"}
 
 
 def stem(path):
@@ -163,6 +165,37 @@ class Project:
     def find(self, paths, name):
         return [symbol for path in paths for symbol in self.by_source.get(path, {}).get(name, ())]
 
+    @cached_property
+    def c_header_links(self):
+        headers = defaultdict(list)
+        by_name = defaultdict(list)
+        by_stem = defaultdict(list)
+        includes = defaultdict(set)
+        for path, source in self.sources.items():
+            if source.language not in C_LANGUAGES:
+                continue
+            basename = PurePosixPath(path).stem
+            if PurePosixPath(path).suffix.lower() in C_HEADERS:
+                headers[basename].append(path)
+            else:
+                by_name[basename].append(path)
+                by_stem[stem(path)].append(path)
+                for dependency in self.dependency_paths(source):
+                    includes[dependency].add(path)
+
+        result = {}
+        for basename, paths in headers.items():
+            for header in paths:
+                linked = includes[header] | set(by_stem[stem(header)])
+                parts = PurePosixPath(stem(header)).parts
+                for index, part in enumerate(parts[:-1]):
+                    if part == "include":
+                        counterpart = "/".join((*parts[:index], "src", *parts[index + 1 :]))
+                        linked.update(by_stem[counterpart])
+                fallback = by_name[basename] if len(paths) == 1 else []
+                result[header] = (sorted(linked), fallback)
+        return result
+
     def resolve_js(self, source, call):
         module = self.js_modules[source.path]
         target = module.call_target(call.node)
@@ -236,10 +269,9 @@ class Project:
         if not all(re.fullmatch(r"[\w$]+", part) for part in parts):
             return [], "Dynamic call target"
 
-        if source.language == "python" and python_comprehension_shadows(
-            source, call.node, parts[0]
-        ):
-            return [], "Name is bound by a comprehension"
+        if source.language == "python":
+            if reason := python_expression_binding(source, call.node, parts[0]):
+                return [], reason
 
         if parts[0] not in {"self", "cls", "this"}:
             local = caller.bindings | source.symbols[0].bindings
@@ -303,17 +335,11 @@ class Project:
                         owners.extend(self.java_classes.get(dependency, []))
                 candidates = self.find(owners, f"{parts[-2]}.{parts[-1]}")
         if not candidates and source.language in C_LANGUAGES:
-            headers = [
-                header
-                for header in self.dependency_paths(source)
-                if PurePosixPath(header).suffix in {".h", ".hpp", ".hh", ".hxx"}
-            ]
-            implementations = [
-                path
-                for path, unit in self.sources.items()
-                if unit.language in C_LANGUAGES and any(stem(path) == stem(h) for h in headers)
-            ]
-            candidates = self.find([*headers, *implementations], name)
+            for header in self.dependency_paths(source):
+                if header in self.c_header_links:
+                    linked, fallback = self.c_header_links[header]
+                    matches = self.find([header, *linked], name)
+                    candidates.extend(matches or self.find(fallback, name))
 
         unique = {symbol.id: symbol for symbol in candidates}
         if len(unique) > 1:

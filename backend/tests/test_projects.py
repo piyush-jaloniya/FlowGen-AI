@@ -436,3 +436,89 @@ def main():
         "L5",
         "L7",
     ]
+
+
+def test_python_lambda_creation_resolves_defaults_but_skips_deferred_body(client):
+    report = analyze(
+        client,
+        [
+            unit(
+                "main.py",
+                """from jobs import load_default, task
+
+def main():
+    callback = lambda data=load_default(): task(data)
+    return callback
+""",
+            ),
+            unit("jobs.py", "def load_default(): return 1\ndef task(data): return data\n"),
+        ],
+    )
+    assert edges(report["graph"], "call") == {
+        (("main.py", "Main"), ("jobs.py", "Load default")),
+    }
+
+
+def test_python_direct_lambda_invocation_resolves_body_with_local_parameters(client):
+    report = analyze(
+        client,
+        [
+            unit(
+                "main.py",
+                """from jobs import task, direct
+
+def main(callback):
+    (lambda task: task())(callback)
+    return (lambda: direct())()
+""",
+            ),
+            unit("jobs.py", "def task(): return 1\ndef direct(): return 2\n"),
+        ],
+    )
+    assert edges(report["graph"], "call") == {
+        (("main.py", "Main"), ("jobs.py", "Direct")),
+    }
+    assert any(
+        node["detail"] == "task · Name is bound by a lambda parameter"
+        for node in report["graph"]["nodes"]
+    )
+
+
+@pytest.mark.parametrize(("source_extension", "header_extension"), [("c", "h"), ("cpp", "hpp")])
+@pytest.mark.parametrize("implementation", ["src/worker", "engine/different_name"])
+def test_c_family_resolves_headers_to_separate_implementation_directories(
+    client, source_extension, header_extension, implementation
+):
+    source = f"pkg/src/main.{source_extension}"
+    header = f"pkg/include/worker.{header_extension}"
+    target = f"pkg/{implementation}.{source_extension}"
+    include = f'#include "../include/worker.{header_extension}"\n'
+    report = analyze(
+        client,
+        [
+            unit(source, include + "int main(void) { return work(); }"),
+            unit(header, "int work(void);"),
+            unit(
+                target,
+                (include if implementation.startswith("engine/") else "")
+                + "int work(void) { return 1; }",
+            ),
+            unit(f"unrelated/src/worker.{source_extension}", "int work(void) { return 2; }"),
+        ],
+    )
+    assert edges(report["graph"], "call") == {((source, "Main"), (target, "Work"))}
+
+
+def test_c_family_keeps_duplicate_unlinked_implementations_ambiguous(client):
+    report = analyze(
+        client,
+        [
+            unit("app/main.c", '#include "../headers/worker.h"\nint main(void){ return work(); }'),
+            unit("headers/worker.h", "int work(void);"),
+            unit("one/worker.c", "int work(void) { return 1; }"),
+            unit("two/worker.c", "int work(void) { return 2; }"),
+        ],
+    )
+    graph = report["graph"]
+    assert not edges(graph, "call")
+    assert any("Multiple possible targets" in (node["detail"] or "") for node in graph["nodes"])
