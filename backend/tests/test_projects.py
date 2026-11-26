@@ -361,3 +361,78 @@ function main() { place(); }
     assert edges(overview, "dependency") == {
         (("main.cjs", "main.cjs"), (target, target)),
     }
+
+
+@pytest.mark.parametrize("specifier", ["./order.service", "@services/order.service"])
+def test_typescript_resolves_dotted_imports_and_dependencies(client, specifier):
+    report = analyze(
+        client,
+        [
+            unit(
+                "src/main.ts",
+                f'import {{ place }} from "{specifier}"; function main(){{ place(); }}',
+            ),
+            unit("src/order.service.ts", "export function place() {}"),
+            unit("tsconfig.json", '{"compilerOptions":{"paths":{"@services/*":["./src/*"]}}}'),
+        ],
+    )
+    assert edges(report["graph"], "call") == {
+        (("src/main.ts", "Main"), ("src/order.service.ts", "Place")),
+    }
+    overview = analyze(client, report["files"], "overview")["graph"]
+    assert edges(overview, "dependency") == {
+        (("src/main.ts", "src/main.ts"), ("src/order.service.ts", "src/order.service.ts")),
+    }
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "[process() for process, *rest in items]",
+        "{process() for process in items}",
+        "{item: process() for process, item in items}",
+        "(process() for process in items)",
+    ],
+)
+def test_python_comprehension_targets_shadow_imports(client, expression):
+    report = analyze(
+        client,
+        [
+            unit(
+                "main.py",
+                f"from jobs import process\n\ndef main(items):\n    return {expression}\n",
+            ),
+            unit("jobs.py", "def process():\n    return 1\n"),
+        ],
+    )
+    graph = report["graph"]
+    assert not edges(graph, "call")
+    external = next(node for node in graph["nodes"] if node["kind"] == "external")
+    assert external["detail"] == "process · Name is bound by a comprehension"
+
+
+def test_python_first_iterable_uses_enclosing_scope(client):
+    report = analyze(
+        client,
+        [
+            unit(
+                "main.py",
+                """from jobs import process
+
+def main():
+    return [
+        process()
+        for process in process()
+        if process()
+    ]
+""",
+            ),
+            unit("jobs.py", "def process():\n    return []\n"),
+        ],
+    )
+    graph = report["graph"]
+    assert [edge["label"] for edge in graph["edges"] if edge["kind"] == "call"] == ["L6"]
+    assert [edge["label"] for edge in graph["edges"] if edge["kind"] == "external"] == [
+        "L5",
+        "L7",
+    ]

@@ -8,13 +8,14 @@ from pathlib import PurePosixPath
 from .flow import FlowBuilder
 from .javascript import Import, JSModule, Local, StaticClass
 from .model import LANGUAGES, MAX_SYMBOLS, AnalysisError, Graph, humanize
-from .syntax import parse_source
+from .syntax import parse_source, python_comprehension_shadows
 from .tsconfig import Configs, safe_relative
 
 MAX_TRACE_SYMBOLS = 80
 MAX_UNRESOLVED = 45
 MAX_EXPORT_LOOKUPS = 256
 JS_LANGUAGES = {"javascript", "typescript"}
+JS_EXTENSIONS = {extension for language in JS_LANGUAGES for extension in LANGUAGES[language]}
 C_LANGUAGES = {"c", "cpp"}
 
 
@@ -107,7 +108,11 @@ class Project:
             suffix = PurePosixPath(target).suffix
             substitutions = extension_map.get(suffix, ()) if source.language == "typescript" else ()
             candidates = [stem(target) + ext for ext in substitutions] + [target]
-            if commonjs or not suffix:
+            if (
+                commonjs
+                or not suffix
+                or (source.language == "typescript" and suffix not in JS_EXTENSIONS)
+            ):
                 candidates.extend(target + ext for ext in implicit_extensions)
                 candidates.extend(joined(target, "index" + ext) for ext in implicit_extensions)
             for path in candidates:
@@ -230,6 +235,11 @@ class Project:
         parts = name.split(".")
         if not all(re.fullmatch(r"[\w$]+", part) for part in parts):
             return [], "Dynamic call target"
+
+        if source.language == "python" and python_comprehension_shadows(
+            source, call.node, parts[0]
+        ):
+            return [], "Name is bound by a comprehension"
 
         if parts[0] not in {"self", "cls", "this"}:
             local = caller.bindings | source.symbols[0].bindings

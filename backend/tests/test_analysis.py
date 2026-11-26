@@ -385,3 +385,21 @@ function main() {
     assert ("Which handler matches?", "(shouldRethrow(error))", "error") in labels(graph)
     assert not any(label == "Uncaught" for _, _, label in labels(graph))
     assert ("throw error", "Uncaught exception", "Exception") in labels(graph)
+
+
+@pytest.mark.parametrize("catch_all", ["catch(...)", "catch ( /* all errors */ ... )"])
+def test_cpp_ellipsis_handler_catches_all_exceptions(client, catch_all):
+    source = f"int main() {{ try {{ throw 1; }} catch(int value) {{ return value; }} {catch_all} {{ return 0; }} }}"
+    graph = report(client, file("main.cpp", source))["graph"]
+    assert not any(label == "Uncaught" for _, _, label in labels(graph))
+    assert any(
+        origin == "Which handler matches?" and target == "return 0"
+        for origin, target, _ in labels(graph)
+    )
+
+
+@pytest.mark.parametrize("separator", ["", "\n"])
+def test_cpp_typed_handler_leaves_unmatched_exceptions_possible(client, separator):
+    source = f"int main(){{ try {{ throw 1; }} catch{separator}(int value) {{ return value; }} }}"
+    graph = report(client, file("main.cpp", source))["graph"]
+    assert ("Which handler matches?", "Uncaught exception", "Uncaught") in labels(graph)

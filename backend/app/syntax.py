@@ -53,6 +53,13 @@ CONTAINERS = {
     "declaration_list",
     "field_declaration_list",
 }
+PYTHON_COMPREHENSIONS = {
+    "list_comprehension",
+    "set_comprehension",
+    "dictionary_comprehension",
+    "generator_expression",
+}
+PYTHON_TARGET_PATTERNS = {"pattern_list", "tuple_pattern", "list_pattern", "list_splat_pattern"}
 
 GRAMMARS = {
     "python": tree_sitter_python.language,
@@ -263,6 +270,37 @@ def python_bindings(source):
                     alias.asname or alias.name.split(".")[0] for alias in node.names
                 )
             stack.extend(ast.iter_child_nodes(node))
+
+
+def python_comprehension_shadows(source, node, name):
+    offset = node.start_byte
+    parent = node.parent
+    while parent is not None:
+        if parent.type in PYTHON_COMPREHENSIONS:
+            if parent.id not in source.comprehension_scopes:
+                clauses = [
+                    child for child in parent.named_children if child.type == "for_in_clause"
+                ]
+                iterable = field(clauses[0], "right") if clauses else None
+                bound = set()
+                pending = [field(clause, "left") for clause in clauses]
+                while pending:
+                    target = pending.pop()
+                    if target is None:
+                        continue
+                    if target.type == "identifier":
+                        bound.add(source.text(target))
+                    elif target.type in PYTHON_TARGET_PATTERNS:
+                        pending.extend(target.named_children)
+                source.comprehension_scopes[parent.id] = (iterable, bound)
+            iterable, bound = source.comprehension_scopes[parent.id]
+            # Python evaluates the first iterable in the enclosing scope.
+            if name in bound and not (
+                iterable is not None and iterable.start_byte <= offset < iterable.end_byte
+            ):
+                return True
+        parent = parent.parent
+    return False
 
 
 def import_info(source):

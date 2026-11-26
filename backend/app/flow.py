@@ -207,9 +207,14 @@ class FlowBuilder:
                     self.source.text(handler).splitlines()[0].split("{", 1)[0].strip().rstrip(":")
                 )
                 binding = field(handler, "value", "parameter")
+                parameters = field(handler, "parameters")
                 catch_all = (
                     catch_all
-                    or label in {"catch (...)", "catch"}
+                    or (
+                        self.source.language == "cpp"
+                        and parameters is not None
+                        and any(child.type == "..." for child in parameters.children)
+                    )
                     or (self.source.language == "python" and binding is None)
                     or (
                         self.source.language in {"javascript", "typescript"}

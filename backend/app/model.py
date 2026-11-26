@@ -96,6 +96,7 @@ class Source:
     diagnostics: list[dict] = field(default_factory=list)
     imports: dict[str, tuple[str, str]] = field(default_factory=dict)
     dependencies: list[str] = field(default_factory=list)
+    comprehension_scopes: dict = field(default_factory=dict)
 
     def text(self, node) -> str:
         return node.text.decode("utf-8") if node is not None else ""
