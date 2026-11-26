@@ -369,3 +369,19 @@ def test_expression_body_returns_value_and_empty_source_is_diagnostic(client):
     empty = report(client, file("main.py", " "))
     assert empty["graph"] is None
     assert empty["diagnostics"][0]["message"] == "No code found."
+
+
+def test_typescript_parameterized_catch_only_escapes_on_explicit_rethrow(client):
+    source = """
+function main() {
+    try { throw new Error('failed'); }
+    catch (error) {
+        if (shouldRethrow(error)) throw error;
+        return false;
+    }
+}
+"""
+    graph = report(client, file("main.ts", source))["graph"]
+    assert ("Which handler matches?", "(shouldRethrow(error))", "error") in labels(graph)
+    assert not any(label == "Uncaught" for _, _, label in labels(graph))
+    assert ("throw error", "Uncaught exception", "Exception") in labels(graph)

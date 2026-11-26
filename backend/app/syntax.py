@@ -28,6 +28,7 @@ FUNCTIONS = {
 }
 CLASSES = {
     "abstract_class_declaration",
+    "class",
     "class_definition",
     "class_declaration",
     "interface_declaration",

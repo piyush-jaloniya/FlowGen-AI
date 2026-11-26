@@ -107,7 +107,7 @@ class Project:
             suffix = PurePosixPath(target).suffix
             substitutions = extension_map.get(suffix, ()) if source.language == "typescript" else ()
             candidates = [stem(target) + ext for ext in substitutions] + [target]
-            if not suffix:
+            if commonjs or not suffix:
                 candidates.extend(target + ext for ext in implicit_extensions)
                 candidates.extend(joined(target, "index" + ext) for ext in implicit_extensions)
             for path in candidates:

@@ -312,3 +312,52 @@ def test_jsonc_preserves_comment_markers_and_quotes_inside_strings():
     assert result["items"] == ["https://app.example/path", "/*value*/", 'a"b']
     with pytest.raises(JSONDecodeError):
         read_jsonc('{"options": {}, /* unterminated')
+
+
+def test_named_class_expression_keeps_its_constructor_binding_local(client):
+    report = analyze(
+        client,
+        [
+            unit(
+                "main.js",
+                """
+import { Worker } from './worker.js';
+const Local = class Worker {
+  constructor() {}
+  static run() { return new Worker(); }
+};
+function main() { Local.run(); return new Worker(); }
+""",
+            ),
+            unit("worker.js", "export class Worker { constructor() {} }"),
+        ],
+    )
+    assert edges(report["graph"], "call") == {
+        (("main.js", "Main"), ("main.js", "Run")),
+        (("main.js", "Run"), ("main.js", "Constructor")),
+        (("main.js", "Main"), ("worker.js", "Constructor")),
+    }
+
+
+@pytest.mark.parametrize("target", ["order.service.js", "order.service/index.js"])
+def test_commonjs_resolves_dotted_filenames_and_directories(client, target):
+    report = analyze(
+        client,
+        [
+            unit(
+                "main.cjs",
+                """
+const { place } = require('./order.service');
+function main() { place(); }
+""",
+            ),
+            unit(target, "exports.place = function place() {};"),
+        ],
+    )
+    assert edges(report["graph"], "call") == {
+        (("main.cjs", "Main"), (target, "Place")),
+    }
+    overview = analyze(client, report["files"], "overview")["graph"]
+    assert edges(overview, "dependency") == {
+        (("main.cjs", "main.cjs"), (target, target)),
+    }

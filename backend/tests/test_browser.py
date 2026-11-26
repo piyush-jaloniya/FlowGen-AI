@@ -218,3 +218,38 @@ def test_typescript_configuration_is_kept_on_folder_upload_and_redraw(page):
     expect(page.locator("#graph svg")).to_have_attribute("aria-label", "Order")
     page.get_by_role("button", name="Workflow", exact=True).click()
     expect(target).to_be_visible()
+
+
+def test_navigation_cannot_replace_a_fresh_analysis_with_the_previous_report(page):
+    diagram = page.locator("#graph svg")
+    held = []
+    page.route("**/api/analyze", lambda route: held.append(route))
+    page.get_by_label("Source code").fill("def new_input():\n    return 5\n")
+    with page.expect_request("**/api/analyze"):
+        page.get_by_role("button", name="Generate diagram").click()
+    workflow = page.get_by_role("button", name="Workflow", exact=True)
+    expect(workflow).to_be_disabled()
+    expect(page.get_by_label("Diagram scope")).to_be_disabled()
+    workflow.dispatch_event("click")
+    expect(page.locator("#diagram-panel")).to_have_attribute("aria-busy", "true")
+    assert len(held) == 1
+    held[0].continue_()
+    page.unroute("**/api/analyze")
+    expect(diagram).to_have_attribute("aria-label", "New input")
+    expect(workflow).to_be_enabled()
+    workflow.click()
+    expect(workflow).to_have_attribute("aria-pressed", "true")
+    expect(diagram).to_have_attribute("aria-label", "Top-level code")
+
+
+def test_directory_upload_ignores_nested_archives(page, tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "main.py").write_text("def main():\n    return 5\n", encoding="utf-8")
+    (project / "assets").mkdir()
+    (project / "assets" / "fixture.zip").write_bytes(archive({"example.py": "x = 1"}))
+    page.get_by_role("button", name="Files or project").click()
+    page.locator("#folder-input").set_input_files(project)
+    expect(page.locator("#upload-summary")).to_have_text("1 selected · 1 skipped")
+    page.get_by_role("button", name="Generate diagram").click()
+    expect(page.locator("#graph svg")).to_have_attribute("aria-label", "Main")

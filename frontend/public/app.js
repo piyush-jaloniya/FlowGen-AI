@@ -22,7 +22,7 @@ const allowed = /\.(py|pyw|js|mjs|cjs|jsx|tsx?|mts|cts|java|c|h|cc|cpp|cxx|hpp|h
 const tsconfig = /(?:^|\/)tsconfig(?:\.[\w.-]+)?\.json$/;
 const vendor = /(?:^|\/)(?:\.git|\.venv|\.idea|node_modules|vendor|__pycache__|__MACOSX|dist|build|target|venv|coverage)\//;
 const state = { input: 'code', view: 'flowchart', files: [], report: null, graph: null, drawing: null,
-  controller: null, selection: null, zoom: 1, fitMode: 'width', scopeByView: {} };
+  controller: null, generating: false, selection: null, zoom: 1, fitMode: 'width', scopeByView: {} };
 
 function inputMode(mode) {
   state.input = mode;
@@ -64,6 +64,7 @@ function filePath(file) {
 function setFiles(files) {
   state.files = [...files].filter(file => {
     const path = filePath(file);
+    if (file.webkitRelativePath && /\.zip$/i.test(path)) return false;
     return (allowed.test(path) || tsconfig.test(path)) && !vendor.test(path);
   });
   const summary = get('upload-summary');
@@ -141,25 +142,38 @@ function updateScope(symbolId) {
   get('scope-label').hidden = state.view === 'overview' || !symbols.length;
 }
 
-function acceptReport(report) {
+function acceptReport(report, view) {
+  setView(view);
   state.report = report;
   state.scopeByView = {};
   updateScope(report.graph?.symbolId);
   render(report.graph);
 }
 
+async function generateReport(path, payload, view) {
+  const controls = [...viewButtons, select, get('open-flow'), get('load-example'), get('load-project')];
+  state.generating = true;
+  for (const control of controls) control.disabled = true;
+  try {
+    await request(path, payload, report => acceptReport(report, view));
+  } finally {
+    state.generating = false;
+    for (const control of controls) control.disabled = false;
+  }
+}
+
 async function generate(event) {
   event?.preventDefault();
+  if (state.generating) return;
   if (state.input === 'code') {
     if (!code.value.trim()) {
       showMessages(['Enter source code to generate a diagram.']);
       code.focus();
       return;
     }
-    setView('flowchart');
-    await request('/api/analyze', { mode: state.view, files: [
+    await generateReport('/api/analyze', { mode: 'flowchart', files: [
       { path: get('filename').textContent, language: language.value, content: code.value },
-    ] }, acceptReport);
+    ] }, 'flowchart');
   } else {
     if (!state.files.length) {
       showMessages(['Choose source files, a folder, or a ZIP archive.']);
@@ -169,8 +183,8 @@ async function generate(event) {
     for (const file of state.files) data.append('files', file, filePath(file));
     const single = state.files.length === 1 && !state.files[0].webkitRelativePath &&
       !/\.zip$/i.test(state.files[0].name);
-    setView(single ? 'flowchart' : 'workflow');
-    await request('/api/upload?mode=' + state.view, data, acceptReport);
+    const view = single ? 'flowchart' : 'workflow';
+    await generateReport('/api/upload?mode=' + view, data, view);
   }
 }
 
@@ -188,6 +202,7 @@ async function loadProject() {
 }
 
 function redraw(view, symbolId) {
+  if (state.generating) return;
   setView(view);
   if (!state.report?.symbols.length) {
     updateScope();

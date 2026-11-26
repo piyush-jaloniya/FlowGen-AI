@@ -169,11 +169,13 @@ class JSModule:
                     else:
                         writes.append((scope, child(node, "left")))
             elif kind in CLASSES:
+                name = child(node, "name")
                 if kind in {"class_declaration", "abstract_class_declaration"}:
-                    name = child(node, "name")
                     if name is not None:
                         scope.declare(text(name), self.static_class(node), node.end_byte)
                 scope = Scope(scope)
+                if kind == "class" and name is not None:
+                    scope.declare(text(name), self.static_class(node))
             elif kind == "variable_declarator":
                 owner = (
                     scope.function_scope() if node.parent.type == "variable_declaration" else scope

@@ -211,7 +211,10 @@ class FlowBuilder:
                     catch_all
                     or label in {"catch (...)", "catch"}
                     or (self.source.language == "python" and binding is None)
-                    or (self.source.language == "javascript" and handler.type == "catch_clause")
+                    or (
+                        self.source.language in {"javascript", "typescript"}
+                        and handler.type == "catch_clause"
+                    )
                 )
                 self.graph.edge(
                     dispatch,
