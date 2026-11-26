@@ -27,6 +27,7 @@ FUNCTIONS = {
     "generator_function",
 }
 CLASSES = {
+    "abstract_class_declaration",
     "class_definition",
     "class_declaration",
     "interface_declaration",
@@ -115,7 +116,10 @@ def function_name(node):
         "assignment",
         "pair",
     }:
-        return field(node.parent, "name", "left", "key")
+        binding = field(node.parent, "name", "left", "key")
+        if binding is not None and binding.type in {"member_expression", "subscript_expression"}:
+            return field(binding, "property", "index")
+        return binding
     return None
 
 
@@ -218,7 +222,9 @@ def direct_calls(source, root, *, stop=()):
             continue
         name = call_name(source, node)
         if name:
-            calls.append(Call(re.sub(r"\s*(::|->|\?\.|\.)\s*", ".", name), *source_position(node)))
+            calls.append(
+                Call(re.sub(r"\s*(::|->|\?\.|\.)\s*", ".", name), *source_position(node), node)
+            )
     return calls
 
 
@@ -281,27 +287,7 @@ def import_info(source):
         return
 
     for node in source.tree.root_node.named_children:
-        if source.language in {"javascript", "typescript"} and node.type == "import_statement":
-            module = source.text(field(node, "source")).strip("'\"")
-            if not module:
-                continue
-            source.dependencies.append(module)
-            for item in walk(node):
-                if item.type == "import_specifier":
-                    original = source.text(field(item, "name")).strip("'\"")
-                    source.imports[source.text(field(item, "alias")) or original] = (
-                        module,
-                        original,
-                    )
-                elif item.type == "namespace_import":
-                    names = [child for child in item.named_children if child.type == "identifier"]
-                    if names:
-                        source.imports[source.text(names[0])] = (module, "*")
-                elif item.type == "import_clause":
-                    names = [child for child in item.named_children if child.type == "identifier"]
-                    if names:
-                        source.imports[source.text(names[0])] = (module, "default")
-        elif source.language in {"c", "cpp"} and node.type == "preproc_include":
+        if source.language in {"c", "cpp"} and node.type == "preproc_include":
             include = source.text(field(node, "path"))
             if include.startswith('"'):
                 source.dependencies.append(include.strip('"'))

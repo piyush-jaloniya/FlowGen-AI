@@ -1,9 +1,13 @@
 """FlowGen HTTP API and local, same-origin workbench."""
 
+import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
+from anyio import Semaphore, WouldBlock
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -96,7 +100,80 @@ class AnalyzeInput(BaseModel):
     symbolId: str | None = Field(default=None, max_length=800)
 
 
-app = FastAPI(title="FlowGen AI", version="2.0.0", docs_url=None, redoc_url=None, openapi_url=None)
+class DiagramNode(BaseModel):
+    id: str
+    kind: str
+    label: str
+    path: str | None
+    line: int | None
+    endLine: int | None
+    detail: str | None
+    symbolId: str | None
+
+
+class DiagramEdge(BaseModel):
+    source: str
+    target: str
+    label: str
+    kind: str
+
+
+class Diagram(BaseModel):
+    title: str
+    mode: Mode
+    nodes: list[DiagramNode]
+    edges: list[DiagramEdge]
+    warnings: list[str]
+    symbolId: str | None = None
+
+
+class Scope(BaseModel):
+    id: str
+    name: str
+    qualifiedName: str
+    label: str
+    path: str
+    line: int
+    endLine: int
+    entry: str | None
+    module: bool
+
+
+class Diagnostic(BaseModel):
+    path: str | None
+    line: int | None
+    message: str
+
+
+class ProjectReport(BaseModel):
+    files: list[SourceInput]
+    symbols: list[Scope]
+    diagnostics: list[Diagnostic]
+    graph: Diagram | None
+    languages: list[str]
+
+
+class DiagramResponse(BaseModel):
+    graph: Diagram
+
+
+@asynccontextmanager
+async def lifespan(app):
+    slots = os.environ.get("FLOWGEN_ANALYSIS_SLOTS", "2")
+    if slots not in {str(number) for number in range(1, 17)}:
+        raise RuntimeError("FLOWGEN_ANALYSIS_SLOTS must be an integer from 1 to 16.")
+    app.state.analysis_slots = Semaphore(int(slots))
+    yield
+
+
+app = FastAPI(
+    title="FlowGen AI",
+    version="2.1.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url="/api/openapi.json",
+    lifespan=lifespan,
+)
 app.add_middleware(RequestLimits)
 
 
@@ -108,6 +185,28 @@ async def analysis_error(_request, exc):
 @app.exception_handler(HTTPException)
 async def request_error(_request, exc):
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_request, exc):
+    errors = [{key: error[key] for key in ("loc", "msg", "type")} for error in exc.errors()]
+    return JSONResponse({"detail": errors}, status_code=422)
+
+
+async def run_analysis(request, function, *args):
+    slots = request.app.state.analysis_slots
+    try:
+        slots.acquire_nowait()
+    except WouldBlock as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Analysis is busy. Try again shortly.",
+            headers={"Retry-After": "2"},
+        ) from error
+    try:
+        return await run_in_threadpool(function, *args)
+    finally:
+        slots.release()
 
 
 def analyze_files(payload):
@@ -122,6 +221,8 @@ def analyze_files(payload):
         if total > MAX_PROJECT_BYTES:
             fail("Input exceeds the 2 MiB total source limit.", 413)
         files.append(unit)
+    if not any(language in LANGUAGES for _, language, _ in files):
+        fail("No supported source files were found.")
     project = Project(files)
     if payload.symbolId is not None:
         return {"graph": project.select(payload.mode, payload.symbolId)}
@@ -141,19 +242,55 @@ def health():
     }
 
 
-@app.post("/api/analyze")
-def analyze(payload: AnalyzeInput):
-    return analyze_files(payload)
+BUSY_RESPONSE = {
+    503: {"description": "All analysis slots are busy. Retry after the indicated delay."}
+}
 
 
-@app.post("/api/upload")
+@app.post(
+    "/api/analyze",
+    response_model=ProjectReport | DiagramResponse,
+    response_model_exclude_unset=True,
+    responses=BUSY_RESPONSE,
+)
+async def analyze(request: Request, payload: AnalyzeInput):
+    return await run_analysis(request, analyze_files, payload)
+
+
+MULTIPART_REQUEST = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "required": ["files"],
+                    "properties": {
+                        "files": {"type": "array", "items": {"type": "string", "format": "binary"}}
+                    },
+                }
+            }
+        },
+    }
+}
+
+
+def analyze_upload(items, mode):
+    files = archive_entries(items) if isinstance(items, bytes) else clean_uploads(items)
+    return Project(files).report(mode)
+
+
+@app.post(
+    "/api/upload",
+    response_model=ProjectReport,
+    response_model_exclude_unset=True,
+    responses=BUSY_RESPONSE,
+    openapi_extra=MULTIPART_REQUEST,
+)
 async def upload(request: Request, mode: Mode = "workflow"):
     async with request.form(max_files=MAX_FILES, max_fields=2, max_part_size=4096) as form:
         items = await upload_files(form)
-    files = await run_in_threadpool(
-        archive_entries if isinstance(items, bytes) else clean_uploads, items
-    )
-    return await run_in_threadpool(lambda: Project(files).report(mode))
+    return await run_analysis(request, analyze_upload, items, mode)
 
 
 @app.get("/")

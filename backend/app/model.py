@@ -45,6 +45,7 @@ class Call:
     name: str
     line: int
     end_line: int
+    node: object
 
 
 @dataclass

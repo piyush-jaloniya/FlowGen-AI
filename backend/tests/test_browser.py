@@ -203,3 +203,18 @@ def test_drag_and_drop_and_keyboard_submit(page):
     expect(page.locator("#file-list")).to_contain_text("demo.c")
     page.get_by_role("button", name="Generate diagram").click()
     expect(page.locator("#graph svg")).to_have_attribute("aria-label", "From drop")
+
+
+def test_typescript_configuration_is_kept_on_folder_upload_and_redraw(page):
+    project = Path(__file__).parent / "projects" / "typescript_web"
+    page.get_by_role("button", name="Files or project").click()
+    page.locator("#folder-input").set_input_files(project)
+    expect(page.locator("#file-list")).to_contain_text("typescript_web/tsconfig.base.json")
+    page.get_by_role("button", name="Generate diagram").click()
+    target = page.get_by_role("button", name="Order, src/checkout/order.ts, line 3")
+    expect(target).to_be_visible()
+    target.click()
+    page.get_by_role("button", name="Open flowchart").click()
+    expect(page.locator("#graph svg")).to_have_attribute("aria-label", "Order")
+    page.get_by_role("button", name="Workflow", exact=True).click()
+    expect(target).to_be_visible()

@@ -6,11 +6,14 @@ from collections import defaultdict, deque
 from pathlib import PurePosixPath
 
 from .flow import FlowBuilder
+from .javascript import Import, JSModule, Local, StaticClass
 from .model import LANGUAGES, MAX_SYMBOLS, AnalysisError, Graph, humanize
 from .syntax import parse_source
+from .tsconfig import Configs, safe_relative
 
 MAX_TRACE_SYMBOLS = 80
 MAX_UNRESOLVED = 45
+MAX_EXPORT_LOOKUPS = 256
 JS_LANGUAGES = {"javascript", "typescript"}
 C_LANGUAGES = {"c", "cpp"}
 
@@ -35,7 +38,18 @@ def python_names(path):
 
 class Project:
     def __init__(self, files):
-        self.sources = {path: parse_source(path, lang, content) for path, lang, content in files}
+        self.config_files = {path: content for path, lang, content in files if lang == "config"}
+        self.configs = Configs(self.config_files)
+        self.sources = {
+            path: parse_source(path, lang, content)
+            for path, lang, content in files
+            if lang != "config"
+        }
+        self.js_modules = {
+            path: JSModule(source)
+            for path, source in self.sources.items()
+            if source.language in JS_LANGUAGES and source.symbols
+        }
         self.symbols = {}
         self.by_source = defaultdict(lambda: defaultdict(list))
         self.python_modules = defaultdict(list)
@@ -75,22 +89,37 @@ class Project:
         prefix = package[: len(package) + 1 - levels]
         return ".".join(part for part in (*prefix, module.lstrip(".")) if part)
 
+    def js_paths(self, source, module, commonjs):
+        if not safe_relative(module):
+            return []
+        if module.startswith(("./", "../")) or module in {".", ".."}:
+            targets = [joined(posixpath.dirname(source.path), module)]
+        elif source.language == "typescript":
+            targets = self.configs.for_source(source.path).candidates(module)
+        else:
+            return []
+        extension_map = {".js": (".ts", ".tsx"), ".mjs": (".mts",), ".cjs": (".cts",)}
+        if source.language == "typescript":
+            implicit_extensions = (".ts", ".tsx", ".js", ".jsx")
+        else:
+            implicit_extensions = (".js",) if commonjs else (".js", ".jsx", ".mjs")
+        for target in targets:
+            suffix = PurePosixPath(target).suffix
+            substitutions = extension_map.get(suffix, ()) if source.language == "typescript" else ()
+            candidates = [stem(target) + ext for ext in substitutions] + [target]
+            if not suffix:
+                candidates.extend(target + ext for ext in implicit_extensions)
+                candidates.extend(joined(target, "index" + ext) for ext in implicit_extensions)
+            for path in candidates:
+                found = self.sources.get(path)
+                if found is not None and found.language in JS_LANGUAGES:
+                    return [path] if path in self.js_modules else []
+        return []
+
     def module_paths(self, source, module):
         if source.language == "python":
             name = self.relative_python(source, module)
             return self.python_modules.get(name, [])
-        if source.language in JS_LANGUAGES and module.startswith("."):
-            target = joined(posixpath.dirname(source.path), module)
-            if target in self.sources:
-                return [target]
-            bases = [target, joined(target, "index")]
-            if PurePosixPath(target).suffix in {".js", ".mjs", ".cjs"}:
-                bases.append(stem(target))
-            return [
-                path
-                for path, unit in self.sources.items()
-                if unit.language in JS_LANGUAGES and stem(path) in bases
-            ]
         if source.language == "java":
             return self.java_classes.get(module, [])
         if source.language in C_LANGUAGES:
@@ -104,6 +133,15 @@ class Project:
         return []
 
     def dependency_paths(self, source):
+        if analyzer := self.js_modules.get(source.path):
+            return sorted(
+                {
+                    path
+                    for dependency in analyzer.dependencies
+                    for path in self.js_paths(source, dependency.module, dependency.commonjs)
+                    if path != source.path
+                }
+            )
         paths = {
             path
             for dependency in source.dependencies
@@ -120,8 +158,75 @@ class Project:
     def find(self, paths, name):
         return [symbol for path in paths for symbol in self.by_source.get(path, {}).get(name, ())]
 
-    def resolve(self, caller, name):
+    def resolve_js(self, source, call):
+        module = self.js_modules[source.path]
+        target = module.call_target(call.node)
+        if isinstance(target, str):
+            return [self.symbols[target]], None
+        if not isinstance(target, Import):
+            return [], "Value binding or dynamic call target could not be resolved"
+
+        pending = [(source.path, target, ())]
+        visited = set()
+        targets = {}
+        export_lookups = 0
+        while pending:
+            path, value, remaining = pending.pop()
+            index = self.js_modules[path]
+            if isinstance(value, Local):
+                value = index.root.bindings.get(value.name)
+            if isinstance(value, StaticClass) and len(remaining) == 1:
+                value = value.methods.get(remaining[0])
+                remaining = ()
+            elif (
+                isinstance(value, StaticClass)
+                and not remaining
+                and call.node.type == "new_expression"
+            ):
+                value = value.constructor
+            if isinstance(value, str) and not remaining:
+                targets[value] = self.symbols[value]
+            if not isinstance(value, Import):
+                continue
+            names = value.names + remaining
+            key = (path, value, names)
+            if key in visited:
+                continue
+            visited.add(key)
+            export_lookups += 1
+            if export_lookups > MAX_EXPORT_LOOKUPS or len(names) > 40:
+                return [], "Export resolution budget reached"
+            for destination in self.js_paths(self.sources[path], value.module, value.commonjs):
+                exported = self.js_modules[destination]
+                if names and not value.commonjs:
+                    if names[0] in exported.esm:
+                        pending.append((destination, exported.esm[names[0]], names[1:]))
+                        continue
+                    if names[0] != "default" and exported.stars:
+                        pending.extend(
+                            (destination, Import(item, names), ()) for item in exported.stars
+                        )
+                        continue
+                common_names = (
+                    names[1:] if names and not value.commonjs and names[0] == "default" else names
+                )
+                if common_names and common_names[0] in exported.commonjs:
+                    pending.append(
+                        (destination, exported.commonjs[common_names[0]], common_names[1:])
+                    )
+                elif "" in exported.commonjs:
+                    pending.append((destination, exported.commonjs[""], common_names))
+        if len(targets) == 1:
+            return list(targets.values()), None
+        if targets:
+            return [], "Multiple possible exported targets"
+        return [], "External module, unknown export, or unresolved binding"
+
+    def resolve(self, caller, call):
         source = caller.source
+        if source.path in self.js_modules:
+            return self.resolve_js(source, call)
+        name = call.name
         parts = name.split(".")
         if not all(re.fullmatch(r"[\w$]+", part) for part in parts):
             return [], "Dynamic call target"
@@ -164,17 +269,7 @@ class Project:
             remainder = parts[cut:]
             paths = self.module_paths(source, module)
             search = ".".join(([original] if original != "*" else []) + remainder)
-            if original == "default":
-                candidates = [
-                    symbol
-                    for path in paths
-                    for values in self.by_source.get(path, {}).values()
-                    for symbol in values
-                    if symbol.node.parent
-                    and symbol.node.parent.type == "export_statement"
-                    and re.match(r"export\s+default\b", symbol.source.text(symbol.node.parent))
-                ]
-            elif source.language == "java" and len(parts) == 1:
+            if source.language == "java" and len(parts) == 1:
                 owner = module.rsplit(".", 1)[-1]
                 candidates = self.find(paths, f"{owner}.{search}")
             else:
@@ -279,7 +374,10 @@ class Project:
         while pending:
             caller = pending.popleft()
             for call in caller.calls:
-                candidates, reason = self.resolve(caller, call.name)
+                js_module = self.js_modules.get(caller.source.path)
+                if js_module is not None and js_module.module_loader(call.node):
+                    continue
+                candidates, reason = self.resolve(caller, call)
                 if candidates:
                     target = candidates[0]
                     if target.id not in ids:
@@ -329,14 +427,23 @@ class Project:
 
     def report(self, mode):
         graph = None
-        diagnostics = [item for source in self.sources.values() for item in source.diagnostics]
+        diagnostics = [
+            *self.configs.diagnostics,
+            *(item for source in self.sources.values() for item in source.diagnostics),
+        ]
         if self.symbols:
             try:
                 graph = self.select(mode)
             except AnalysisError as exc:
                 diagnostics.append({"path": None, "line": None, "message": str(exc)})
         return {
-            "files": [source.public() for source in self.sources.values()],
+            "files": [
+                *(source.public() for source in self.sources.values()),
+                *(
+                    {"path": path, "language": "config", "content": content}
+                    for path, content in self.config_files.items()
+                ),
+            ],
             "symbols": [symbol.public() for symbol in self.entries()],
             "diagnostics": diagnostics,
             "graph": graph,

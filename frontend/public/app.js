@@ -19,6 +19,7 @@ const diagramPanel = get('diagram-panel');
 const viewButtons = [...document.querySelectorAll('[data-view]')];
 const extensions = { python: 'py', javascript: 'js', typescript: 'ts', java: 'java', c: 'c', cpp: 'cpp' };
 const allowed = /\.(py|pyw|js|mjs|cjs|jsx|tsx?|mts|cts|java|c|h|cc|cpp|cxx|hpp|hh|hxx|zip)$/i;
+const tsconfig = /(?:^|\/)tsconfig(?:\.[\w.-]+)?\.json$/;
 const vendor = /(?:^|\/)(?:\.git|\.venv|\.idea|node_modules|vendor|__pycache__|__MACOSX|dist|build|target|venv|coverage)\//;
 const state = { input: 'code', view: 'flowchart', files: [], report: null, graph: null, drawing: null,
   controller: null, selection: null, zoom: 1, fitMode: 'width', scopeByView: {} };
@@ -61,7 +62,10 @@ function filePath(file) {
 }
 
 function setFiles(files) {
-  state.files = [...files].filter(file => allowed.test(filePath(file)) && !vendor.test(filePath(file)));
+  state.files = [...files].filter(file => {
+    const path = filePath(file);
+    return (allowed.test(path) || tsconfig.test(path)) && !vendor.test(path);
+  });
   const summary = get('upload-summary');
   const list = get('file-list');
   const skipped = files.length - state.files.length;

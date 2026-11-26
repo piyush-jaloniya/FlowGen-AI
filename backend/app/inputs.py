@@ -17,6 +17,7 @@ from .model import (
     MAX_SOURCE_BYTES,
     detect_language,
 )
+from .tsconfig import is_tsconfig
 
 IGNORED_DIRS = {
     ".git",
@@ -58,8 +59,9 @@ def utf8_size(content):
 
 def source_file(path, content, forced_language=None):
     path = source_path(path)
-    language = forced_language or detect_language(path)
-    if language not in LANGUAGES:
+    is_config = is_tsconfig(path)
+    language = "config" if is_config else forced_language or detect_language(path)
+    if not is_config and language not in LANGUAGES:
         fail(f"Unsupported language for {path}.")
     if utf8_size(content) > MAX_SOURCE_BYTES:
         fail(f"{path} exceeds the 256 KiB source limit.", 413)
@@ -94,11 +96,13 @@ def clean_uploads(entries):
         seen.add(path)
         language = "cpp" if use_cpp_headers and path.lower().endswith(".h") else None
         result.append(source_file(path, decode(data, path), language))
+    if not any(language in LANGUAGES for _, language, _ in result):
+        fail("No supported source files were found.")
     return result
 
 
 def supported(path):
-    return detect_language(path) is not None and not (
+    return (detect_language(path) is not None or is_tsconfig(path)) and not (
         set(PurePosixPath(path).parts[:-1]) & IGNORED_DIRS
     )
 
