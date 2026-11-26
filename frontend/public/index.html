@@ -1,16 +1,142 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-
 <head>
-  <meta charset="utf-8" />
-  <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FlowGen AI: The Unified Code Visualization Engine for Flowcharts and Workflows</title>
-  <meta name="description" content="FlowGen AI: The Unified Code Visualization Engine for Flowcharts and Workflows" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10111b">
+  <meta name="description" content="Read code through source-linked flowcharts and project workflows.">
+  <title>FlowGen AI · Code visualization workbench</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script type="module" src="/assets/app.js"></script>
 </head>
-
 <body>
-  <div id="root"></div>
-</body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true">
+        <rect width="32" height="32" rx="9" fill="#9e8aff"></rect>
+        <path d="M16 10v5m-6 7v-4h12v4" fill="none" stroke="#1b1532" stroke-width="1.6" stroke-linecap="round"/>
+        <rect x="12.5" y="7" width="7" height="5" rx="1.3" fill="#1b1532"/>
+        <rect x="6.5" y="21" width="7" height="4" rx="1.3" fill="#1b1532"/>
+        <rect x="18.5" y="21" width="7" height="4" rx="1.3" fill="#1b1532"/>
+      </svg>
+      <span>FlowGen<span class="brand-ai"> AI</span></span>
+    </div>
+    <span class="top-note"><span class="status-dot" aria-hidden="true"></span> Static analysis</span>
+  </header>
 
+  <main>
+    <div class="intro">
+      <div>
+        <h1>Code visualization</h1>
+        <p>Trace a function’s logic or follow a workflow across your project.</p>
+      </div>
+      <button id="load-project" class="button quiet" type="button"><span aria-hidden="true">↗</span> Try a sample project</button>
+    </div>
+
+    <div class="workbench">
+      <section class="panel source-panel" aria-labelledby="source-title">
+        <div class="section-head">
+          <h2 id="source-title">Source</h2>
+          <button id="load-example" class="button text-button" type="button">Load example</button>
+        </div>
+        <div class="segmented" role="group" aria-label="Input type">
+          <button id="mode-code" type="button" aria-pressed="true">Code snippet</button>
+          <button id="mode-files" type="button" aria-pressed="false">Files or project</button>
+        </div>
+        <form id="analyze-form">
+          <div id="code-input">
+            <div class="label-row">
+              <label for="language">Language</label>
+              <select id="language">
+                <option value="python">Python</option>
+                <option value="javascript">JavaScript</option>
+                <option value="typescript">TypeScript</option>
+                <option value="java">Java</option>
+                <option value="c">C</option>
+                <option value="cpp">C++</option>
+              </select>
+            </div>
+            <div class="editor">
+              <div class="editor-header"><span class="code-icon" aria-hidden="true">&lt;/&gt;</span><span id="filename">snippet.py</span></div>
+              <div class="editor-body">
+                <pre id="line-numbers" aria-hidden="true"></pre>
+                <div class="editor-content">
+                  <pre id="highlight" aria-hidden="true"></pre>
+                  <textarea id="code" aria-label="Source code" rows="15" spellcheck="false" autocapitalize="off" wrap="off"></textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="files-input" hidden>
+            <div id="drop-zone" class="drop-zone">
+              <span class="upload-icon" aria-hidden="true">↑</span>
+              <strong>Drop source files or a ZIP</strong>
+              <p>Or choose a project folder.</p>
+              <div class="upload-actions">
+                <button type="button" class="button quiet" id="choose-files">Choose files</button>
+                <button type="button" class="button quiet" id="choose-folder">Choose folder</button>
+              </div>
+              <input type="file" id="file-input" multiple hidden>
+              <input type="file" id="folder-input" webkitdirectory multiple hidden>
+            </div>
+            <p id="upload-summary" class="hint" role="status">Python, JavaScript, TypeScript, Java, C, and C++</p>
+            <ul id="file-list" class="file-list" hidden></ul>
+          </div>
+          <button id="analyze-button" class="button primary" type="submit"><span aria-hidden="true">↳</span> <span id="analyze-label">Generate diagram</span></button>
+        </form>
+      </section>
+
+      <section class="panel diagram-panel" id="diagram-panel" aria-labelledby="diagram-title">
+        <div class="section-head diagram-head">
+          <h2 id="diagram-title">Diagram</h2>
+          <button id="export-toggle" class="button quiet export-button" type="button" aria-expanded="false" aria-controls="export-menu" disabled>Export <span aria-hidden="true">↓</span></button>
+          <div id="export-menu" class="export-menu" hidden>
+            <button type="button" data-format="svg">SVG image</button>
+            <button type="button" data-format="png">PNG image</button>
+            <button type="button" data-format="json">Graph JSON</button>
+            <button type="button" data-format="mmd">Mermaid source</button>
+          </div>
+        </div>
+        <div class="diagram-controls">
+          <div class="view-controls" role="group" aria-label="Diagram view">
+            <button type="button" data-view="flowchart" aria-pressed="true">Flowchart</button>
+            <button type="button" data-view="workflow" aria-pressed="false">Workflow</button>
+            <button type="button" data-view="overview" aria-pressed="false">Modules</button>
+          </div>
+          <label class="scope" id="scope-label" hidden>Scope
+            <select id="scope" aria-label="Diagram scope"></select>
+          </label>
+        </div>
+
+        <div class="feedback" id="messages" hidden aria-live="polite"></div>
+        <div class="graph-frame">
+          <div id="viewport" class="viewport" tabindex="0" aria-label="Scrollable diagram">
+            <div id="graph" class="graph"></div>
+            <p id="empty" class="empty-state">Generate a diagram to explore your code.</p>
+          </div>
+          <div class="canvas-tools" role="group" aria-label="Diagram controls">
+            <button id="zoom-out" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+            <button id="fit" type="button" title="Fit diagram" aria-label="Fit diagram">Fit</button>
+            <button id="zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+            <button id="expand" type="button" title="Expand diagram" aria-label="Expand diagram" aria-pressed="false">⛶</button>
+          </div>
+        </div>
+        <div class="diagram-footer">
+          <span id="graph-count" aria-live="polite">No diagram yet</span>
+          <div id="legend" class="legend" aria-label="Diagram legend"></div>
+        </div>
+
+        <aside id="details" class="details" hidden aria-label="Selected step">
+          <div class="details-head">
+            <div><strong id="step-title"></strong><span id="step-location"></span></div>
+            <button class="button text-button" id="close-details" type="button" aria-label="Close step details">×</button>
+          </div>
+          <p id="step-detail" class="step-detail"></p>
+          <pre id="source-preview" class="source-preview"></pre>
+          <button id="open-flow" class="button quiet" type="button" hidden>Open flowchart</button>
+        </aside>
+      </section>
+    </div>
+  </main>
+</body>
 </html>
