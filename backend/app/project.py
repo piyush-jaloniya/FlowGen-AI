@@ -87,25 +87,12 @@ class Project:
         }
         if not any(unit.c_private_declarations for unit in c_sources.values()):
             return
-        direct_headers = {
-            path: [
-                target
-                for target in self.dependency_paths(unit)
-                if target in c_sources and PurePosixPath(target).suffix.lower() in C_HEADERS
-            ]
-            for path, unit in c_sources.items()
-        }
         for path, unit in c_sources.items():
-            pending = list(direct_headers[path])
-            visited = {path}
-            declarations = set()
-            while pending:
-                header = pending.pop()
-                if header in visited:
-                    continue
-                visited.add(header)
-                declarations.update(c_sources[header].c_private_declarations)
-                pending.extend(direct_headers[header])
+            declarations = {
+                declaration
+                for header in self.c_transitive_headers[path]
+                for declaration in c_sources[header].c_private_declarations
+            }
             if not declarations:
                 continue
             private_names = {name for name, _ in declarations}
@@ -203,6 +190,30 @@ class Project:
         return [symbol for path in paths for symbol in self.by_source.get(path, {}).get(name, ())]
 
     @cached_property
+    def c_transitive_headers(self):
+        direct = {
+            path: [
+                target
+                for target in self.dependency_paths(unit)
+                if self.sources[target].language in C_LANGUAGES
+                and PurePosixPath(target).suffix.lower() in C_HEADERS
+            ]
+            for path, unit in self.sources.items()
+            if unit.language in C_LANGUAGES
+        }
+        result = {}
+        for path, includes in direct.items():
+            visited = {path}
+            pending = includes.copy()
+            while pending:
+                header = pending.pop()
+                if header not in visited:
+                    visited.add(header)
+                    pending.extend(direct[header])
+            result[path] = sorted(visited - {path})
+        return result
+
+    @cached_property
     def c_header_links(self):
         headers = defaultdict(list)
         by_name = defaultdict(list)
@@ -217,7 +228,7 @@ class Project:
             else:
                 by_name[basename].append(path)
                 by_stem[stem(path)].append(path)
-                for dependency in self.dependency_paths(source):
+                for dependency in self.c_transitive_headers[path]:
                     includes[dependency].add(path)
 
         result = {}
@@ -372,11 +383,11 @@ class Project:
                         owners.extend(self.java_classes.get(dependency, []))
                 candidates = self.find(owners, f"{parts[-2]}.{parts[-1]}")
         if not candidates and source.language in C_LANGUAGES:
-            dependencies = self.dependency_paths(source)
+            dependencies = self.c_transitive_headers[source.path]
             for header in dependencies:
                 if header in self.c_header_links:
                     linked, fallback = self.c_header_links[header]
-                    # A directly included header contributes its definitions to this unit.
+                    # Included headers contribute their definitions to this translation unit.
                     matches = self.find([header], name) or [
                         symbol for symbol in self.find(linked, name) if not symbol.local_only
                     ]

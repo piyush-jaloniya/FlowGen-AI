@@ -699,3 +699,47 @@ def test_c_family_inherits_internal_linkage_from_included_headers(client, ext, n
     run = next(symbol["id"] for symbol in report["symbols"] if symbol["name"] == "run")
     internal = analyze(client, report["files"], "workflow", run)["graph"]
     assert edges(internal, "call") == {((worker, "Run"), (worker, "Helper"))}
+
+
+@pytest.mark.parametrize("ext", ["c", "cpp"])
+@pytest.mark.parametrize("implementation", ["matched", "includes_umbrella", "external"])
+def test_c_family_resolves_calls_through_nested_headers(client, ext, implementation):
+    main = f"src/main.{ext}"
+    source = f"src/{'worker' if implementation == 'matched' else 'engine'}.{ext}"
+    include_api = '#include "../include/api.h"\n'
+    files = [
+        unit(main, include_api + "int main(void) { return run(); }"),
+        unit("include/api.h", '#ifndef API_H\n#define API_H\n#include "worker.h"\n#endif\n'),
+        unit(
+            "include/worker.h",
+            '#ifndef WORKER_H\n#define WORKER_H\n#include "api.h"\nint run(void);\n#endif\n',
+        ),
+        unit(
+            source,
+            (include_api if implementation == "includes_umbrella" else "")
+            + "int run(void) { return 1; }",
+        ),
+    ]
+    if implementation != "external":
+        files.append(unit(f"unrelated/stub.{ext}", "int run(void) { return 2; }"))
+
+    result = analyze(client, files)
+    assert not result["diagnostics"]
+    assert edges(result["graph"], "call") == {((main, "Main"), (source, "Run"))}
+    overview = analyze(client, files, "overview")["graph"]
+    assert ((main, main), ("include/api.h", "include/api.h")) in edges(overview, "dependency")
+    assert ((main, main), ("include/worker.h", "include/worker.h")) not in edges(
+        overview, "dependency"
+    )
+
+
+def test_nested_header_can_supply_a_translation_unit_local_inline_body(client):
+    result = analyze(
+        client,
+        [
+            unit("main.c", '#include "api.h"\nint main(void){ return run(); }'),
+            unit("api.h", '#include "detail.h"\n'),
+            unit("detail.h", "static inline int run(void){ return 1; }"),
+        ],
+    )
+    assert edges(result["graph"], "call") == {(("main.c", "Main"), ("detail.h", "Run"))}
