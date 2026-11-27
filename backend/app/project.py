@@ -79,6 +79,43 @@ class Project:
             raise AnalysisError(
                 f"Project has more than {MAX_SYMBOLS} analyzable symbols. Upload a smaller slice."
             )
+        self.apply_c_header_linkage()
+
+    def apply_c_header_linkage(self):
+        c_sources = {
+            path: unit for path, unit in self.sources.items() if unit.language in C_LANGUAGES
+        }
+        if not any(unit.c_private_declarations for unit in c_sources.values()):
+            return
+        direct_headers = {
+            path: [
+                target
+                for target in self.dependency_paths(unit)
+                if target in c_sources and PurePosixPath(target).suffix.lower() in C_HEADERS
+            ]
+            for path, unit in c_sources.items()
+        }
+        for path, unit in c_sources.items():
+            pending = list(direct_headers[path])
+            visited = {path}
+            declarations = set()
+            while pending:
+                header = pending.pop()
+                if header in visited:
+                    continue
+                visited.add(header)
+                declarations.update(c_sources[header].c_private_declarations)
+                pending.extend(direct_headers[header])
+            if not declarations:
+                continue
+            private_names = {name for name, _ in declarations}
+            for symbol in unit.symbols:
+                if not symbol.module and symbol.c_parameter_types is not None:
+                    symbol.local_only |= (
+                        symbol.qualified_name in private_names
+                        if unit.language == "c"
+                        else (symbol.qualified_name, symbol.c_parameter_types) in declarations
+                    )
 
     def relative_python(self, source, module):
         if not module.startswith("."):

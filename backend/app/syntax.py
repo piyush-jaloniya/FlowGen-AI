@@ -259,13 +259,12 @@ def c_scope(source, node):
 
 
 def c_signature(source, function):
-    # C declarations name a single linker symbol. C++ can overload its parameter types.
     parameters = field(function, "parameters")
-    if source.language == "c" or parameters is None:
+    if parameters is None:
         return ()
     types = []
-    for parameter in parameters.named_children:
-        if parameter.type == "comment":
+    for parameter in parameters.children:
+        if parameter.type in {"comment", "(", ")", ","}:
             continue
         name = function_name(parameter)
         default = field(parameter, "default_value")
@@ -286,7 +285,8 @@ def c_signature(source, function):
 
 
 def c_linkage(source):
-    private_declarations = set()
+    private_names = set()
+    private_declarations = source.c_private_declarations
     declarations = []
     for node in walk(source.tree.root_node, FUNCTIONS | C_CLASS_NODES):
         if node.type != "declaration":
@@ -302,10 +302,17 @@ def c_linkage(source):
             signature = c_signature(source, function)
             if c_static(source, node):
                 private_declarations.add((qualified, signature))
+                private_names.add(qualified)
             else:
                 declarations.append((qualified, signature))
     source.c_public_declarations.update(
-        name for name, signature in declarations if (name, signature) not in private_declarations
+        name
+        for name, signature in declarations
+        if not (
+            name in private_names
+            if source.language == "c"
+            else (name, signature) in private_declarations
+        )
     )
 
     for symbol in source.symbols:
@@ -318,7 +325,12 @@ def c_linkage(source):
             function, _ = c_function_declarator(field(symbol.node, "declarator"))
             if function is not None:
                 signature = c_signature(source, function)
-                symbol.local_only = (symbol.qualified_name, signature) in private_declarations
+                symbol.c_parameter_types = signature
+                symbol.local_only = (
+                    symbol.qualified_name in private_names
+                    if source.language == "c"
+                    else (symbol.qualified_name, signature) in private_declarations
+                )
 
 
 def call_name(source, node):
@@ -507,12 +519,32 @@ def import_info(source):
                         source.imports[item.asname or item.name] = (module, item.name)
         return
 
+    if source.language in {"c", "cpp"}:
+        pending = list(reversed(source.tree.root_node.named_children))
+        while pending:
+            node = pending.pop()
+            if node.type == "preproc_include":
+                include = source.text(field(node, "path"))
+                if include.startswith('"'):
+                    source.dependencies.append(include.strip('"'))
+            elif node.type == "preproc_ifdef" and node.children[0].type == "#ifndef":
+                guard = source.text(field(node, "name"))
+                body = [
+                    child
+                    for child in node.named_children
+                    if child.type not in {"identifier", "comment"}
+                ]
+                if (
+                    body
+                    and body[0].type == "preproc_def"
+                    and source.text(field(body[0], "name")) == guard
+                    and field(node, "alternative") is None
+                ):
+                    pending.extend(reversed(body[1:]))
+        return
+
     for node in source.tree.root_node.named_children:
-        if source.language in {"c", "cpp"} and node.type == "preproc_include":
-            include = source.text(field(node, "path"))
-            if include.startswith('"'):
-                source.dependencies.append(include.strip('"'))
-        elif source.language == "java" and node.type == "import_declaration":
+        if source.language == "java" and node.type == "import_declaration":
             parts = source.text(node).removeprefix("import").strip().rstrip(";").split()
             if parts:
                 module = parts[-1]

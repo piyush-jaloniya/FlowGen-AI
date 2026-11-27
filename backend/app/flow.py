@@ -1,8 +1,9 @@
 """Build source-level control flow with explicit continuation targets."""
 
+from collections import defaultdict, deque
 from dataclasses import dataclass, replace
 
-from .model import AnalysisError, Graph, concise, humanize
+from .model import MAX_GRAPH_NODES, AnalysisError, Graph, concise, diagram_limit_error, humanize
 from .syntax import (
     CLASSES,
     CONTAINERS,
@@ -33,6 +34,9 @@ IGNORED = {"comment", "line_comment", "block_comment", "empty_statement"}
 CALL_BOUNDARIES = (
     BRANCHES | LOOPS | TRIES | {"match_statement", "switch_statement", "switch_expression"}
 )
+# The public size limit counts reachable nodes. Bound scratch nodes and deferred work separately.
+MAX_FLOW_SCRATCH_NODES = MAX_GRAPH_NODES * 8
+MAX_FLOW_CONTINUATIONS = MAX_GRAPH_NODES * 40
 
 
 @dataclass(frozen=True)
@@ -47,8 +51,31 @@ class FlowBuilder:
     def __init__(self, symbol):
         self.symbol = symbol
         self.source = symbol.source
-        self.graph = Graph(symbol.label, "flowchart")
+        self.graph = Graph(symbol.label, "flowchart", node_limit=MAX_FLOW_SCRATCH_NODES)
         self.warnings = set()
+        self.continuations = {}
+        self.resolved = {}
+        self.next_continuation = 0
+
+    def defer(self, build):
+        if self.next_continuation >= MAX_FLOW_CONTINUATIONS:
+            raise AnalysisError(
+                "Diagram construction reached its processing limit. Select a smaller scope."
+            )
+        reference = f"deferred{self.next_continuation}"
+        self.next_continuation += 1
+        self.continuations[reference] = build
+        return reference
+
+    def resolve(self, reference):
+        chain = []
+        while reference in self.continuations:
+            chain.append(reference)
+            reference = self.continuations.pop(reference)()
+        reference = self.resolved.get(reference, reference)
+        for alias in chain:
+            self.resolved[alias] = reference
+        return reference
 
     def add(self, kind, label, node):
         return self.graph.node(
@@ -61,16 +88,21 @@ class FlowBuilder:
         )
 
     def statements(self, nodes, following, targets):
-        for node in reversed(nodes):
-            following = self.statement(node, following, targets)
-        return following
+        def at(index):
+            while index < len(nodes) and nodes[index].type in IGNORED:
+                index += 1
+            if index == len(nodes):
+                return following
+            return self.defer(lambda: self.statement(nodes[index], at(index + 1), targets))
+
+        return at(0)
 
     def body(self, node, following, targets):
         if node is None:
             return following
         if node.type in GROUPS or node.type in {"else_clause", "finally_clause", "finally_block"}:
             return self.statements(node.named_children, following, targets)
-        return self.statement(node, following, targets)
+        return self.defer(lambda: self.statement(node, following, targets))
 
     def condition(self, node, following, targets):
         condition = field(node, "condition")
@@ -322,8 +354,8 @@ class FlowBuilder:
 
     def build(self):
         start = self.add("start", f"Start · {self.symbol.label}", self.symbol.node)
-        normal = self.graph.node("end", "End")
-        thrown = self.graph.node("end", "Uncaught exception")
+        normal = self.defer(lambda: self.graph.node("end", "End"))
+        thrown = self.defer(lambda: self.graph.node("end", "Uncaught exception"))
         targets = Targets(normal, thrown)
         try:
             if self.symbol.node.type == "arrow_function" and self.symbol.body.type not in GROUPS:
@@ -332,21 +364,34 @@ class FlowBuilder:
                 self.graph.edge(body, normal, "Return")
             else:
                 body = self.body(self.symbol.body, normal, targets)
+            self.graph.edge(start, body)
+            return self.reachable_graph(start)
         except RecursionError as exc:
             raise AnalysisError("The code is nested too deeply to diagram.") from exc
-        self.graph.edge(start, body)
+
+    def reachable_graph(self, start):
         reachable = {start}
-        outgoing = {}
-        for edge in self.graph.edges:
-            outgoing.setdefault(edge["source"], []).append(edge["target"])
-        pending = [start]
+        outgoing = defaultdict(list)
+        pending = deque([start])
+        cursor = 0
+        edges = {}
         while pending:
-            for target in outgoing.get(pending.pop(), []):
+            source = pending.popleft()
+            while cursor < len(self.graph.edges):
+                edge = self.graph.edges[cursor]
+                outgoing[edge["source"]].append(edge)
+                cursor += 1
+            for edge in outgoing[source]:
+                target = self.resolve(edge["target"])
+                edge = {**edge, "target": target}
+                edges[tuple(edge.values())] = edge
                 if target not in reachable:
                     reachable.add(target)
+                    if len(reachable) > MAX_GRAPH_NODES:
+                        raise diagram_limit_error()
                     pending.append(target)
         result = self.graph.public()
         result["nodes"] = [node for node in result["nodes"] if node["id"] in reachable]
-        result["edges"] = [edge for edge in result["edges"] if edge["source"] in reachable]
+        result["edges"] = list(edges.values())
         result["warnings"] = sorted(self.warnings)
         return result

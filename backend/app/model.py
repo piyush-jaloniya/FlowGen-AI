@@ -62,6 +62,7 @@ class Symbol:
     calls: list[Call] = field(default_factory=list)
     bindings: set[str] = field(default_factory=set)
     local_only: bool = False
+    c_parameter_types: tuple | None = None
 
     @property
     def id(self):
@@ -99,6 +100,7 @@ class Source:
     dependencies: list[str] = field(default_factory=list)
     comprehension_scopes: dict = field(default_factory=dict)
     c_public_declarations: set[str] = field(default_factory=set)
+    c_private_declarations: set[tuple[str, tuple]] = field(default_factory=set)
 
     def text(self, node) -> str:
         return node.text.decode("utf-8") if node is not None else ""
@@ -111,17 +113,26 @@ class AnalysisError(ValueError):
     pass
 
 
+def diagram_limit_error():
+    return AnalysisError(f"Diagram exceeds {MAX_GRAPH_NODES} nodes. Select a smaller scope.")
+
+
 class Graph:
-    def __init__(self, title: str, mode: str):
+    def __init__(self, title: str, mode: str, *, node_limit=MAX_GRAPH_NODES):
         self.title = title
         self.mode = mode
         self.nodes = []
         self.edges = []
         self._edges = set()
+        self.node_limit = node_limit
 
     def node(self, kind, label, *, path=None, line=None, end_line=None, detail=None, symbol=None):
-        if len(self.nodes) >= MAX_GRAPH_NODES:
-            raise AnalysisError(f"Diagram exceeds {MAX_GRAPH_NODES} nodes. Select a smaller scope.")
+        if len(self.nodes) >= self.node_limit:
+            if self.node_limit == MAX_GRAPH_NODES:
+                raise diagram_limit_error()
+            raise AnalysisError(
+                "Diagram construction reached its processing limit. Select a smaller scope."
+            )
         identifier = f"n{len(self.nodes)}"
         self.nodes.append(
             {

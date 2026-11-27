@@ -1,9 +1,11 @@
 """Bounded source ingestion without extracting archive members to the filesystem."""
 
 import io
+import lzma
 import re
 import stat
 import zipfile
+import zlib
 from pathlib import PurePosixPath
 
 from fastapi import HTTPException
@@ -136,7 +138,16 @@ def archive_entries(data):
                     fail("Archive exceeds the uncompressed source limit.", 413)
                 size += len(payload)
                 entries.append((path, payload))
-    except (zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError, OSError, ValueError):
+    except (
+        zipfile.BadZipFile,
+        RuntimeError,
+        NotImplementedError,
+        EOFError,
+        OSError,
+        ValueError,
+        zlib.error,
+        lzma.LZMAError,
+    ):
         fail("Unable to read this ZIP archive.")
     return clean_uploads(entries)
 

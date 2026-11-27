@@ -81,10 +81,10 @@ def test_flowchart_for_each_language(client, path, code, name):
     graph = data["graph"]
     assert any(node["kind"] == "decision" for node in graph["nodes"])
     assert {edge[2] for edge in labels(graph)} >= {"True", "False", "Return"}
-    assert [(start, target) for start, target, label in labels(graph) if label == "Return"] == [
+    assert {(start, target) for start, target, label in labels(graph) if label == "Return"} == {
         ("return 2", "End"),
         ("return 1", "End"),
-    ]
+    }
 
 
 def test_nested_loops_return_and_unreachable_code(client):
@@ -423,3 +423,57 @@ def test_python_match_only_falls_through_when_pattern_or_guard_can_fail(client, 
     source = f"def main(x):\n    match x:\n        case {pattern}:\n            return 1\n"
     graph = report(client, file("main.py", source))["graph"]
     assert any(label == "No match" for _, _, label in labels(graph)) is can_fail
+
+
+def test_finally_only_builds_cleanup_paths_that_are_reachable(client):
+    source = "def main():\n    try:\n        pass\n    except:\n        pass\n    finally:\n"
+    source += "".join(f"        item{i} = {i}\n" for i in range(151))
+    data = report(client, file("main.py", source))
+    assert data["diagnostics"] == []
+    graph = data["graph"]
+    assert 151 < len(graph["nodes"]) < 170
+    assert sum(node["label"] == "item150 = 150" for node in graph["nodes"]) == 1
+
+
+def test_node_cap_counts_reachable_nodes_and_ignores_dead_suffixes(client):
+    source = "def main():\n    return 1\n" + "    ignored = 1\n" * 400
+    graph = report(client, file("main.py", source))["graph"]
+    assert {node["label"] for node in graph["nodes"]} == {"Start · Main", "return 1", "End"}
+    for statements, expected in [(298, 300), (299, None)]:
+        source = "def main():\n" + "    item = 1\n" * statements
+        data = report(client, file("main.py", source))
+        if expected:
+            assert len(data["graph"]["nodes"]) == expected
+        else:
+            assert data["graph"] is None
+            assert "exceeds 300 nodes" in data["diagnostics"][0]["message"]
+
+
+def test_nested_finally_preserves_break_and_continue_destinations(client):
+    graph = report(
+        client,
+        file(
+            "main.py",
+            """def main(flag):
+    while flag:
+        try:
+            try:
+                if flag == 1:
+                    break
+                continue
+            finally:
+                inner()
+        finally:
+            outer()
+    return 0
+""",
+        ),
+    )["graph"]
+    node_labels = {node["id"]: node["label"] for node in graph["nodes"]}
+    for start, destination in [("Break", "return 0"), ("Continue", "flag")]:
+        current = next(node_id for node_id, label in node_labels.items() if label == start)
+        for expected in ["Inner", "Outer", destination]:
+            next_ids = {edge["target"] for edge in graph["edges"] if edge["source"] == current}
+            assert len(next_ids) == 1
+            current = next_ids.pop()
+            assert node_labels[current] == expected

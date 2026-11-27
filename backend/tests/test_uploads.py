@@ -1,5 +1,7 @@
+import lzma
+import zlib
 from io import BytesIO
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipExtFile, ZipFile
 
 import pytest
 from starlette.testclient import TestClient
@@ -94,3 +96,18 @@ def test_invalid_paths_duplicate_paths_and_unknown_symbol(client):
 def test_whole_request_body_is_bounded(client):
     response = client.post("/api/analyze", content=b"x" * (MAX_REQUEST_BYTES + 1))
     assert response.status_code == 413
+
+
+@pytest.mark.parametrize("error", [zlib.error, lzma.LZMAError])
+def test_archive_decompression_errors_are_reported_as_bad_uploads(client, monkeypatch, error):
+    data = archive({"a.py": "x = 1"})
+
+    def corrupt_member(_member, _limit):
+        raise error("invalid compressed member")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ZipExtFile, "read", corrupt_member)
+        response = client.post("/api/upload", files={"files": ("corrupt.zip", data)})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unable to read this ZIP archive."
+    assert client.post("/api/upload", files={"files": ("valid.zip", data)}).status_code == 200

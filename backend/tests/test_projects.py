@@ -661,3 +661,41 @@ int helper(double n){return 3;}
     assert edges(graph, "call") == {(("main.cpp", "Main"), ("worker.cpp", "Helper"))}
     helper = next(node for node in graph["nodes"] if node["kind"] == "call")
     assert helper["line"] == 4
+
+
+@pytest.mark.parametrize("ext", ["c", "cpp"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_c_family_inherits_internal_linkage_from_included_headers(client, ext, nested):
+    main, worker, other = (f"src/{name}.{ext}" for name in ("main", "worker", "other"))
+    files = [
+        unit(main, '#include "../include/worker.h"\nint main(void){ return helper(1); }'),
+        unit("include/worker.h", "int helper(int);"),
+        unit(
+            worker,
+            '#include "../include/private.h"\nint helper(int value){return value;}\nint run(){return helper(2);}',
+        ),
+        unit(other, "int helper(int value){return value + 1;}"),
+    ]
+    declaration = "static int helper(int);"
+    if nested:
+        files.extend(
+            [
+                unit(
+                    "include/private.h",
+                    '#ifndef PRIVATE_H\n#define PRIVATE_H\n#include "detail.h"\n#endif\n',
+                ),
+                unit(
+                    "include/detail.h",
+                    '#ifndef DETAIL_H\n#define DETAIL_H\n#include "private.h"\n'
+                    + declaration
+                    + "\n#endif\n",
+                ),
+            ]
+        )
+    else:
+        files.append(unit("include/private.h", declaration))
+    report = analyze(client, files)
+    assert edges(report["graph"], "call") == {((main, "Main"), (other, "Helper"))}
+    run = next(symbol["id"] for symbol in report["symbols"] if symbol["name"] == "run")
+    internal = analyze(client, report["files"], "workflow", run)["graph"]
+    assert edges(internal, "call") == {((worker, "Run"), (worker, "Helper"))}
