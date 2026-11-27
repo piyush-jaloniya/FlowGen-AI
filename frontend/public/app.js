@@ -148,6 +148,7 @@ function acceptReport(report, view) {
   state.scopeByView = {};
   updateScope(report.graph?.symbolId);
   render(report.graph);
+  showGraphMessages();
 }
 
 async function generateReport(path, payload, view) {
@@ -215,9 +216,14 @@ function redraw(view, symbolId) {
   }
   return request('/api/analyze', { files: state.report.files, mode: view, symbolId: view === 'overview' ? null : chosen },
     data => {
+      if (!data.graph) {
+        showMessages(data.diagnostics?.length ? data.diagnostics : ['No diagram is available for this view.']);
+        return;
+      }
       setView(view);
-      updateScope(data.graph?.symbolId);
+      updateScope(data.graph.symbolId);
       render(data.graph);
+      showGraphMessages();
     });
 }
 
@@ -295,7 +301,10 @@ function render(graph) {
     item.append(mark, label);
     return item;
   }) : []));
-  showMessages([...(state.report?.diagnostics || []), ...(graph?.warnings || [])]);
+}
+
+function showGraphMessages() {
+  showMessages([...(state.report?.diagnostics || []), ...(state.graph?.warnings || [])]);
 }
 
 function expand(value) {

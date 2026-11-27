@@ -280,3 +280,35 @@ def test_failed_scope_and_view_changes_preserve_the_displayed_diagram(page):
     )
     expect(scope).to_have_value(small)
     expect(diagram).to_have_attribute("aria-label", "Small")
+
+
+def test_view_without_graph_preserves_workflow_and_reports_diagnostics(page):
+    page.get_by_role("button", name="Files or project").click()
+    page.locator("#file-input").set_input_files(
+        [
+            {
+                "name": "main.py",
+                "mimeType": "text/plain",
+                "buffer": ("def main():\n" + "    x = 1\n" * 310).encode("utf-8"),
+            },
+            {"name": "helper.py", "mimeType": "text/plain", "buffer": b"def helper(): pass\n"},
+        ]
+    )
+    page.get_by_role("button", name="Generate diagram").click()
+    diagram = page.locator("#graph svg")
+    expect(diagram).to_have_attribute("aria-label", "Main")
+    scope = page.get_by_label("Diagram scope")
+    selected = scope.input_value()
+    page.get_by_role("button", name="Flowchart", exact=True).click()
+    expect(page.locator("#messages")).to_contain_text("Diagram exceeds 300 nodes")
+    page.set_viewport_size({"width": 390, "height": 844})
+    expect(page.get_by_role("button", name="Workflow", exact=True)).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    expect(scope).to_have_value(selected)
+    expect(diagram).to_have_attribute("aria-label", "Main")
+    expect(page.locator("#messages")).to_contain_text("Diagram exceeds 300 nodes")
+    page.locator("#export-toggle").click()
+    with page.expect_download() as exported:
+        page.get_by_role("button", name="Graph JSON").click()
+    assert json.loads(exported.value.path().read_text(encoding="utf-8"))["mode"] == "workflow"

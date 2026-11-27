@@ -522,3 +522,142 @@ def test_c_family_keeps_duplicate_unlinked_implementations_ambiguous(client):
     graph = report["graph"]
     assert not edges(graph, "call")
     assert any("Multiple possible targets" in (node["detail"] or "") for node in graph["nodes"])
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "callback",
+        "_ as callback",
+        "[*callback]",
+        "{'key': value, **callback}",
+        "Box(fn=callback)",
+    ],
+)
+def test_python_match_captures_shadow_imported_functions(client, pattern):
+    report = analyze(
+        client,
+        [
+            unit(
+                "main.py",
+                f"""from jobs import callback
+
+def main(value):
+    match value:
+        case {pattern}:
+            return callback()
+""",
+            ),
+            unit("jobs.py", "def callback(): return 1\n"),
+        ],
+    )
+    assert not edges(report["graph"], "call")
+    assert (("main.py", "Main"), ("main.py", "Callback")) in edges(report["graph"], "external")
+
+
+def test_python_value_pattern_and_wildcard_do_not_shadow_imports(client):
+    report = analyze(
+        client,
+        [
+            unit(
+                "main.py",
+                """from jobs import callback
+
+def main(value):
+    match value:
+        case State.callback:
+            return callback()
+        case _:
+            return callback()
+""",
+            ),
+            unit("jobs.py", "def callback(): return 1\n"),
+        ],
+    )
+    assert edges(report["graph"], "call") == {
+        (("main.py", "Main"), ("jobs.py", "Callback")),
+    }
+
+
+@pytest.mark.parametrize(
+    ("ext", "private"),
+    [
+        ("c", "static int helper(int value) { return value; }"),
+        ("c", "static int helper(int); int helper(int value) { return value; }"),
+        ("cpp", "static int helper(int value) { return value; }"),
+        ("cpp", "static int helper(int); int helper(int value) { return value; }"),
+        ("cpp", "namespace { int helper(int value) { return value; } }"),
+    ],
+)
+def test_c_family_keeps_private_definitions_within_their_translation_unit(client, ext, private):
+    main = f"src/main.{ext}"
+    worker = f"src/worker.{ext}"
+    other = f"src/other.{ext}"
+    report = analyze(
+        client,
+        [
+            unit(main, '#include "../include/worker.h"\nint main(void) { return helper(0); }'),
+            unit("include/worker.h", "int helper(int value);"),
+            unit(worker, private + "\nint run(void) { return helper(1); }"),
+            unit(other, "int helper(int value) { return value + 1; }"),
+        ],
+    )
+    assert edges(report["graph"], "call") == {((main, "Main"), (other, "Helper"))}
+    run = next(symbol["id"] for symbol in report["symbols"] if symbol["name"] == "run")
+    internal = analyze(client, report["files"], "workflow", run)["graph"]
+    assert edges(internal, "call") == {((worker, "Run"), (worker, "Helper"))}
+
+
+def test_c_static_inline_in_included_header_is_visible_to_the_caller(client):
+    report = analyze(
+        client,
+        [
+            unit("main.c", '#include "helper.h"\nint main(void){ return helper(); }'),
+            unit("helper.h", "static inline int helper(void){ return 1; }"),
+        ],
+    )
+    assert edges(report["graph"], "call") == {(("main.c", "Main"), ("helper.h", "Helper"))}
+
+
+def test_cpp_static_class_method_is_available_to_other_translation_units(client):
+    report = analyze(
+        client,
+        [
+            unit("main.cpp", '#include "worker.hpp"\nint main(){return Worker::run();}'),
+            unit("worker.hpp", "struct Worker { static int run(){return 1;} };"),
+        ],
+    )
+    assert edges(report["graph"], "call") == {(("main.cpp", "Main"), ("worker.hpp", "Run"))}
+
+
+def test_c_private_definition_remains_unresolved_without_an_external_replacement(client):
+    report = analyze(
+        client,
+        [
+            unit("main.c", "extern int helper(void); int main(void){ return helper(); }"),
+            unit("worker.c", "static int helper(void){ return 1; }"),
+        ],
+    )
+    assert not edges(report["graph"], "call")
+    assert (("main.c", "Main"), ("main.c", "Helper")) in edges(report["graph"], "external")
+
+
+def test_cpp_static_prototype_does_not_hide_a_public_overload(client):
+    report = analyze(
+        client,
+        [
+            unit("main.cpp", "int helper(double); int main(){return helper(2.0);}"),
+            unit(
+                "worker.cpp",
+                """
+static int helper(int);
+int helper(int n){return n;}
+int helper(double n){return 3;}
+""",
+            ),
+        ],
+    )
+    graph = report["graph"]
+    assert edges(graph, "call") == {(("main.cpp", "Main"), ("worker.cpp", "Helper"))}
+    helper = next(node for node in graph["nodes"] if node["kind"] == "call")
+    assert helper["line"] == 4

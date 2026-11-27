@@ -60,6 +60,7 @@ PYTHON_COMPREHENSIONS = {
     "generator_expression",
 }
 PYTHON_TARGET_PATTERNS = {"pattern_list", "tuple_pattern", "list_pattern", "list_splat_pattern"}
+C_CLASS_NODES = {"class_specifier", "struct_specifier", "union_specifier"}
 
 GRAMMARS = {
     "python": tree_sitter_python.language,
@@ -209,8 +210,115 @@ def collect_symbols(source):
         elif node.type in CLASSES:
             label = source.text(field(node, "name"))
             if label:
+                if node.type == "namespace_definition":
+                    label = label.replace("::", ".")
                 scope = (*scope, label)
         stack.extend((child, scope) for child in reversed(node.named_children))
+
+
+def c_function_declarator(node):
+    while node is not None:
+        binding = field(node, "declarator")
+        if node.type == "function_declarator":
+            name = binding
+            while name is not None and name.type == "parenthesized_declarator":
+                name = next(iter(name.named_children), None)
+            if name is not None and name.type in {
+                "identifier",
+                "field_identifier",
+                "qualified_identifier",
+            }:
+                return node, name
+        node = binding
+    return None, None
+
+
+def c_static(source, node):
+    return any(
+        child.type == "storage_class_specifier" and source.text(child) == "static"
+        for child in node.named_children
+    )
+
+
+def c_scope(source, node):
+    namespaces = []
+    inside_class = False
+    anonymous = False
+    enclosing = node.parent
+    while enclosing is not None:
+        if enclosing.type == "namespace_definition":
+            name = field(enclosing, "name")
+            if name is None:
+                anonymous = True
+            else:
+                namespaces.append(source.text(name).replace("::", "."))
+        elif enclosing.type in C_CLASS_NODES:
+            inside_class = True
+        enclosing = enclosing.parent
+    return list(reversed(namespaces)), inside_class, anonymous
+
+
+def c_signature(source, function):
+    # C declarations name a single linker symbol. C++ can overload its parameter types.
+    parameters = field(function, "parameters")
+    if source.language == "c" or parameters is None:
+        return ()
+    types = []
+    for parameter in parameters.named_children:
+        if parameter.type == "comment":
+            continue
+        name = function_name(parameter)
+        default = field(parameter, "default_value")
+        tokens = []
+        pending = [parameter]
+        while pending:
+            node = pending.pop()
+            if node == name or node == default or node.type == "comment" or node.type == "=":
+                continue
+            if node.child_count:
+                pending.extend(reversed(node.children))
+            else:
+                tokens.append(source.text(node))
+        types.append(tuple(tokens))
+    if types == [("void",)]:
+        return ()
+    return tuple(types)
+
+
+def c_linkage(source):
+    private_declarations = set()
+    declarations = []
+    for node in walk(source.tree.root_node, FUNCTIONS | C_CLASS_NODES):
+        if node.type != "declaration":
+            continue
+        namespaces, _, anonymous = c_scope(source, node)
+        if anonymous:
+            continue
+        for declaration in node.children_by_field_name("declarator"):
+            function, name = c_function_declarator(declaration)
+            if function is None:
+                continue
+            qualified = ".".join((*namespaces, source.text(name).replace("::", ".")))
+            signature = c_signature(source, function)
+            if c_static(source, node):
+                private_declarations.add((qualified, signature))
+            else:
+                declarations.append((qualified, signature))
+    source.c_public_declarations.update(
+        name for name, signature in declarations if (name, signature) not in private_declarations
+    )
+
+    for symbol in source.symbols:
+        if symbol.module:
+            continue
+        _, inside_class, anonymous = c_scope(source, symbol.node)
+        if anonymous or (not inside_class and c_static(source, symbol.node)):
+            symbol.local_only = True
+        else:
+            function, _ = c_function_declarator(field(symbol.node, "declarator"))
+            if function is not None:
+                signature = c_signature(source, function)
+                symbol.local_only = (symbol.qualified_name, signature) in private_declarations
 
 
 def call_name(source, node):
@@ -315,6 +423,10 @@ def python_bindings(source):
                 symbol.bindings.add(node.id)
             elif isinstance(node, ast.ExceptHandler) and node.name:
                 symbol.bindings.add(node.name)
+            elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+                symbol.bindings.add(node.name)
+            elif isinstance(node, ast.MatchMapping) and node.rest:
+                symbol.bindings.add(node.rest)
             elif isinstance(node, (ast.Import, ast.ImportFrom)) and not symbol.module:
                 symbol.bindings.update(
                     alias.asname or alias.name.split(".")[0] for alias in node.names
@@ -442,6 +554,8 @@ def parse_source(path, language, content):
     import_info(source)
     if language == "python":
         python_bindings(source)
+    elif language in {"c", "cpp"}:
+        c_linkage(source)
     for symbol in source.symbols:
         symbol.calls = direct_calls(source, symbol.body)
 

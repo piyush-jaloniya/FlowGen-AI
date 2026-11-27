@@ -61,6 +61,7 @@ class Symbol:
     entry: str | None = None
     calls: list[Call] = field(default_factory=list)
     bindings: set[str] = field(default_factory=set)
+    local_only: bool = False
 
     @property
     def id(self):
@@ -97,6 +98,7 @@ class Source:
     imports: dict[str, tuple[str, str]] = field(default_factory=dict)
     dependencies: list[str] = field(default_factory=list)
     comprehension_scopes: dict = field(default_factory=dict)
+    c_public_declarations: set[str] = field(default_factory=set)
 
     def text(self, node) -> str:
         return node.text.decode("utf-8") if node is not None else ""

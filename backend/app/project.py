@@ -335,11 +335,29 @@ class Project:
                         owners.extend(self.java_classes.get(dependency, []))
                 candidates = self.find(owners, f"{parts[-2]}.{parts[-1]}")
         if not candidates and source.language in C_LANGUAGES:
-            for header in self.dependency_paths(source):
+            dependencies = self.dependency_paths(source)
+            for header in dependencies:
                 if header in self.c_header_links:
                     linked, fallback = self.c_header_links[header]
-                    matches = self.find([header, *linked], name)
-                    candidates.extend(matches or self.find(fallback, name))
+                    # A directly included header contributes its definitions to this unit.
+                    matches = self.find([header], name) or [
+                        symbol for symbol in self.find(linked, name) if not symbol.local_only
+                    ]
+                    candidates.extend(
+                        matches
+                        or [symbol for symbol in self.find(fallback, name) if not symbol.local_only]
+                    )
+            if not candidates and (
+                name in source.c_public_declarations
+                or any(name in self.sources[path].c_public_declarations for path in dependencies)
+            ):
+                candidates = [
+                    symbol
+                    for symbol in self.find(self.sources, name)
+                    if symbol.source.language == source.language
+                    and not symbol.local_only
+                    and PurePosixPath(symbol.source.path).suffix.lower() not in C_HEADERS
+                ]
 
         unique = {symbol.id: symbol for symbol in candidates}
         if len(unique) > 1:
