@@ -1,191 +1,56 @@
-# 🎨 FlowGen AI: The Unified Code Visualization Engine
+# FlowGen AI
 
-**AI-powered flowchart and workflow generation from source code**
+FlowGen AI turns source code into interactive flowcharts and lets you follow calls across a project. Click a node to see its source lines. Open a called function’s flowchart directly from the project workflow.
 
-Transform your code into beautiful, interactive diagrams automatically!
+## Run locally
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-![React](https://img.shields.io/badge/react-18.2-blue.svg)
+Install Python 3.11 or newer, clone the repository, and run these commands from its root.
 
-## ✨ Features
-
-### 🎯 Core Features
-
-- **Multi-Language Support**: Python, JavaScript, Java, C, C++
-- **Dual Visualization**: Flowcharts (detailed logic) + Workflows (high-level steps)
-- **Three Input Modes**: Code snippet, file upload, or entire project folder
-- **Smart Parsing**: AST-based analysis for accurate code understanding
-- **Export Options**: JSON, PNG, Mermaid (.mmd) formats
-
-### 🤖 AI-Powered (Optional)
-
-- **Code Descriptions**: Natural language explanations
-- **Algorithm Detection**: Auto-identify sorting, searching, recursion, etc.
-- **Smart Suggestions**: Code improvement recommendations
-- **FREE with Groq API!** (14,400 requests/day)
-
-### 🎨 Modern UI
-
-- Dark theme with gradient accents
-- Monaco code editor with syntax highlighting
-- Vertical diagram layout
-- Fullscreen view
-- Responsive design
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Python 3.11+
-- Node.js 16+
-- Git
-
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/piyush-jaloniya/FlowGen-AI.git
-cd FlowGen-AI
-
-# Backend setup
-cd backend
-python -m venv venv
-.\venv\Scripts\Activate.ps1  # Windows
-# or: source venv/bin/activate  # Linux/Mac
-
-pip install -r requirements.txt
-python -m spacy download en_core_web_sm
-
-# Frontend setup
-cd ../frontend
-npm install
-
-# Start servers
-# Terminal 1 - Backend:
-cd backend
-uvicorn app.main:app --reload
-
-# Terminal 2 - Frontend:
-cd frontend
-npm start
+```sh
+python -m venv .venv
 ```
 
-App opens at **<http://localhost:3000>** 🎉
+Activate the environment with `source .venv/bin/activate` on macOS or Linux, or `.\.venv\Scripts\Activate.ps1` in Windows PowerShell.
 
-## 🆓 Enable FREE AI Features (Optional)
+```sh
+python -m pip install -r backend/requirements.txt
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --limit-concurrency 24
+```
 
-Get smarter code analysis in 3 minutes!
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The workbench ships with the API and needs no Node build, model download, or API key.
 
-1. **Get free Groq API key**: <https://console.groq.com/keys>
-2. **Create `.env`**:
+## Use the workbench
 
-   ```bash
-   cd backend
-   copy .env.example .env
-   ```
+- **Code snippet.** Select a language, paste code, and generate a flowchart. Scope selects a specific function or the file’s top-level code. Use **Load example** for the selected language.
+- **Files or project.** Upload a source file to open its flowchart, or choose multiple files, a directory, or a ZIP to explore a workflow. **Workflow** follows statically resolvable calls from the selected entry or function. **Modules** shows source files linked by imports or includes. Select a workflow node and choose **Open flowchart** to see its logic.
+- **Read and share.** Select a node to see its original code and line numbers. Fit, zoom, or expand the diagram. Export SVG, PNG, graph JSON, or Mermaid source.
 
-3. **Add your key** to `backend/.env`:
+Python, JavaScript, TypeScript, Java, C, and C++ are supported. All six languages support same-file calls where the analyzer can identify a target. Project analysis also covers common Python imports, Java class-qualified calls, and C/C++ links from headers to implementations, including conventional `include/` and `src/` layouts. C and C++ cross-file lookup respects internal linkage and can use a visible declaration to find a unique external definition.
 
-   ```env
-   GROQ_API_KEY=gsk_your_key_here
-   GROQ_MODEL=llama-3.1-70b-versatile
-   ```
+JavaScript and TypeScript analysis accounts for lexical shadowing, static class methods, and statically linked ES module exports and re-exports. CommonJS support covers literal local `require()` calls and explicit top-level exports. Include `tsconfig.json` and any inherited `tsconfig.*.json` files in a TypeScript upload to resolve local `paths` aliases. Configs may contain comments and trailing commas. Configuration files are used during analysis and excluded from module diagrams.
 
-4. **Done!** Backend auto-reloads. See AI insights when you generate diagrams.
+### What the graphs show
 
-📖 **Full guide**: [GROQ_SETUP.md](GROQ_SETUP.md)
+Flowcharts model statements, decisions, and loop and function exits. Compound expressions are shown as a single step. Some language-specific constructs are summarized with a dashed node and a diagnostic. Exception edges show possible paths. Workflows show possible calls and their source lines. Runtime dispatch, framework callbacks, package and bundler resolution, and generated code can require additional build or runtime context. Select a dashed node to see why its target was unresolved.
 
-## 📖 Usage
+Labels are generated locally by splitting identifiers and preserving acronyms. The source preview retains the original identifier or statement. The workbench sends input to its FlowGen API for static parsing. FlowGen parses source without executing it, contacting an AI provider, or retaining the project after the request. Uploaded source and configuration must be UTF-8. The limits are 256 KiB per file, 2 MiB of source and configuration, 120 files, and 8 MiB for a ZIP. Common dependency and build directories are skipped.
 
-### 1. Code Snippet Mode
+[API contract](backend/API_DOCUMENTATION.md)
 
-- Select language (Python, JavaScript, Java, C, C++)
-- Paste or write code
-- Click "Generate Diagrams"
+## Operate the service
 
-### 2. File Upload Mode
+The default command binds to loopback. For a shared instance, put the service behind an authenticated HTTPS reverse proxy with request and connection limits. Keep request bodies out of access logs. Use `GET /api/health` for a liveness probe and `GET /api/openapi.json` for the machine-readable API contract.
 
-- Click "Upload File"
-- Select `.py`, `.js`, `.java`, `.c`, `.cpp` files
-- Supports multiple files!
+Each worker defaults to two simultaneous analyses. Set `FLOWGEN_ANALYSIS_SLOTS` to a value from 1 to 16 before starting the service to tune that limit. Both project uploads and JSON analysis share the limit. Saturated workers return HTTP 503 with `Retry-After`, while the health endpoint remains available.
 
-### 3. Project Folder Mode
+## Verify
 
-- ZIP your project folder
-- Upload the ZIP file
-- Analyzes all code files automatically
+```sh
+python -m pip install -r backend/requirements-dev.txt
+python -m playwright install chromium
+python -m ruff check backend
+python -m ruff format --check backend
+python -m pytest backend
+```
 
-## 🎨 Tech Stack
-
-**Frontend:**
-
-- React 18.2
-- Monaco Editor (VS Code editor)
-- Mermaid.js (diagram rendering)
-- Axios (API calls)
-
-**Backend:**
-
-- FastAPI (Python web framework)
-- spaCy (NLP for semantic analysis)
-- Tree-sitter (C/C++ parsing)
-- Esprima (JavaScript parsing)
-- Javalang (Java parsing)
-
-**AI/ML (Optional):**
-
-- Groq API (free LLM)
-- OpenAI API (alternative)
-
-## 📊 Supported Languages
-
-| Language | Parser | Features |
-|----------|--------|----------|
-| Python | AST | Functions, control flow, calls |
-| JavaScript | Esprima | Functions, ES6 support |
-| Java | Javalang | Classes, methods |
-| C | Tree-sitter | Functions, headers |
-| C++ | Tree-sitter | Classes, templates |
-
-## 🎯 Roadmap
-
-- [ ] More languages (Go, Rust, TypeScript)
-- [ ] Interactive diagram editing
-- [ ] Collaboration features
-- [ ] VS Code extension
-- [ ] Custom themes
-- [ ] Code complexity metrics
-
-## 📝 Documentation
-
-- [AI Integration Guide](AI_INTEGRATION.md) - Detailed AI setup
-- [Quick Groq Setup](GROQ_SETUP.md) - 3-minute free AI setup
-- [Features Overview](FEATURES.md) - All features explained
-
-## 🤝 Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repo
-2. Create a feature branch
-3. Submit a pull request
-
-## 📄 License
-
-MIT License - feel free to use for any purpose!
-
-## 🙏 Acknowledgments
-
-- Mermaid.js for beautiful diagrams
-- spaCy for NLP capabilities
-- Groq for free AI API
-- Monaco Editor team
-
----
-
-**Made with ❤️ for developers who love visual code understanding**
-
-⭐ Star this repo if you find it useful!
-
-# FlowGen-AI
+Set `FLOWGEN_CHROMIUM_CHANNEL=chrome` in the environment to use an installed Google Chrome instead of Playwright’s Chromium. Browser tests launch a loopback server and cover the workbench with the live API. Project fixtures exercise a CommonJS CLI, a Python HTTP service, and a TypeScript project with inherited path aliases.

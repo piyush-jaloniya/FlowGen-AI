@@ -1,0 +1,60 @@
+export const exampleCode = {
+  python: [
+    'def calculate_total(items, member):',
+    '    subtotal = sum(items)',
+    '    if member:',
+    '        subtotal *= 0.9',
+    '    return round(subtotal, 2)',
+    '',
+    'if __name__ == "__main__":',
+    '    print(calculate_total([24, 36], True))',
+  ].join('\n'),
+  javascript: [
+    'function calculateTotal(items, member) {',
+    '  let subtotal = items.reduce((a, b) => a + b, 0);',
+    '  if (member) subtotal *= 0.9;',
+    '  return Math.round(subtotal * 100) / 100;',
+    '}',
+    '',
+    'console.log(calculateTotal([24, 36], true));',
+  ].join('\n'),
+  typescript: [
+    'function calculateTotal(items: number[], member: boolean): number {',
+    '  let subtotal = items.reduce((a, b) => a + b, 0);',
+    '  if (member) subtotal *= 0.9;',
+    '  return Math.round(subtotal * 100) / 100;',
+    '}',
+  ].join('\n'),
+  java: [
+    'class Checkout {',
+    '    static double calculateTotal(double subtotal, boolean member) {',
+    '        if (member) {',
+    '            subtotal *= 0.9;',
+    '        }',
+    '        return Math.round(subtotal * 100) / 100.0;',
+    '    }',
+    '}',
+  ].join('\n'),
+  c: [
+    'double calculate_total(double subtotal, int member) {',
+    '    if (member) {',
+    '        subtotal *= 0.9;',
+    '    }',
+    '    return subtotal;',
+    '}',
+  ].join('\n'),
+  cpp: [
+    'double calculateTotal(double subtotal, bool member) {',
+    '    if (member) {',
+    '        subtotal *= 0.9;',
+    '    }',
+    '    return subtotal;',
+    '}',
+  ].join('\n'),
+};
+
+export const exampleProject = [
+  { path: 'main.py', content: 'from billing import calculate_total\nfrom receipt import print_receipt\n\n\ndef main():\n    total = calculate_total([24, 36], member=True)\n    print_receipt(total)\n' },
+  { path: 'billing.py', content: exampleCode.python.split('\n\n')[0] + '\n' },
+  { path: 'receipt.py', content: 'def print_receipt(total):\n    print(f"Total: {total:.2f}")\n' },
+];

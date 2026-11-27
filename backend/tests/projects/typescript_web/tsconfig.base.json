@@ -1,0 +1,9 @@
+{
+  // Allow fallback paths without reaching outside this project.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@checkout/*": ["./compat/*", "./src/checkout/*"],
+    },
+  },
+}
